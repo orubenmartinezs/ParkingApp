@@ -432,13 +432,30 @@ class _FinancialReportTabState extends State<FinancialReportTab> {
 
     // Calcular Totales
     double parkingSum = 0;
+
+    // Iterar sobre todos los registros para sumar flujos de efectivo reales en el rango
     for (var r in parkingRecords) {
-      // Solo sumar si salió dentro del rango (El ingreso se realiza al salir)
-      // y coincidir con lógica del backend que suma 'costo' basado en exit_time
+      // 1. Sumar Pagos por Adelantado (Prepago) si ocurrieron en este rango
+      // El pago adelantado ocurre en el momento de la entrada (entryTime)
+      if (!r.entryTime.isBefore(start) && !r.entryTime.isAfter(end)) {
+        parkingSum += (r.amountPaid ?? 0);
+      }
+
+      // 2. Sumar el cobro final (Remanente) si la salida ocurrió en este rango
+      // El cobro final ocurre en exitTime. Se debe restar lo ya pagado para no duplicar.
       if (r.exitTime != null &&
           !r.exitTime!.isBefore(start) &&
           !r.exitTime!.isAfter(end)) {
-        parkingSum += (r.cost ?? 0);
+        final totalCost = r.cost ?? 0;
+        final alreadyPaid = r.amountPaid ?? 0;
+        // Solo sumamos la diferencia que se paga al salir
+        // Si pagó 50 al entrar y el costo es 80, al salir paga 30.
+        // Si pagó 50 al entrar y el costo es 50, al salir paga 0.
+        final remainingPayment = (totalCost - alreadyPaid) > 0
+            ? (totalCost - alreadyPaid)
+            : 0.0;
+
+        parkingSum += remainingPayment;
       }
     }
 

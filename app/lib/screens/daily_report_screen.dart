@@ -29,23 +29,29 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
 
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
-    
+
     // Load Users for name mapping
     final users = await _dbHelper.getAllUsers();
     final userMap = {for (var u in users) u.id: u.name};
-    
+
     // Load Records
     final allRecords = await _dbHelper.getAllRecords();
-    
+
     // Filter by selected date
-    final startOfDay = DateTime(_selectedDate.year, _selectedDate.month, _selectedDate.day);
+    final startOfDay = DateTime(
+      _selectedDate.year,
+      _selectedDate.month,
+      _selectedDate.day,
+    );
     final endOfDay = startOfDay.add(const Duration(days: 1));
-    
+
     final filtered = allRecords.where((r) {
-      final matchesEntry = r.entryTime.isAfter(startOfDay) && r.entryTime.isBefore(endOfDay);
-      final matchesExit = r.exitTime != null && 
-                          r.exitTime!.isAfter(startOfDay) && 
-                          r.exitTime!.isBefore(endOfDay);
+      final matchesEntry =
+          r.entryTime.isAfter(startOfDay) && r.entryTime.isBefore(endOfDay);
+      final matchesExit =
+          r.exitTime != null &&
+          r.exitTime!.isAfter(startOfDay) &&
+          r.exitTime!.isBefore(endOfDay);
       return matchesEntry || matchesExit;
     }).toList();
 
@@ -87,21 +93,21 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
       'Tarifa',
       'Cobrador',
       'Comentarios',
-      'Estado'
+      'Estado',
     ]);
 
     // Data
     for (var record in _todayRecords) {
-      final exitTimeStr = record.exitTime != null 
-          ? DateFormat('HH:mm').format(record.exitTime!) 
+      final exitTimeStr = record.exitTime != null
+          ? DateFormat('HH:mm').format(record.exitTime!)
           : '-';
-      final duration = record.exitTime != null 
+      final duration = record.exitTime != null
           ? record.exitTime!.difference(record.entryTime).inMinutes
           : 0;
-      final cashierName = record.exitUserId != null 
-          ? (_userNames[record.exitUserId] ?? 'Desconocido') 
+      final cashierName = record.exitUserId != null
+          ? (_userNames[record.exitUserId] ?? 'Desconocido')
           : '-';
-      
+
       rows.add([
         record.id.substring(0, 8),
         record.plate,
@@ -113,7 +119,7 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
         record.tariff ?? '-',
         cashierName,
         record.notes ?? '',
-        record.exitTime != null ? 'Completado' : 'En Sitio'
+        record.exitTime != null ? 'Completado' : 'En Sitio',
       ]);
     }
 
@@ -125,7 +131,7 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
       final path = '${directory.path}/cierre_caja_$dateStr.csv';
       final file = File(path);
       await file.writeAsString(csv);
-      
+
       if (!await file.exists()) {
         throw Exception('El archivo no pudo ser creado en $path');
       }
@@ -153,24 +159,73 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Calculations
-    final completedRecords = _todayRecords.where((r) => r.exitTime != null).toList();
-    final pendingRecords = _todayRecords.where((r) => r.exitTime == null).toList();
-    final totalCollected = completedRecords.fold<double>(0, (sum, r) => sum + (r.cost ?? 0));
+    // Filtros base
+    final completedRecords = _todayRecords
+        .where((r) => r.exitTime != null)
+        .toList();
+    final pendingRecords = _todayRecords
+        .where((r) => r.exitTime == null)
+        .toList();
 
-    // Breakdown by User (Cashier)
+    // Rango del día seleccionado para comparaciones precisas
+    final startOfDay = DateTime(
+      _selectedDate.year,
+      _selectedDate.month,
+      _selectedDate.day,
+    );
+    final endOfDay = startOfDay.add(const Duration(days: 1));
+
+    // Lógica de Flujo de Caja (Cash Flow)
+    // Se suma lo que realmente entró a la caja en este día
+    double calculatedTotal = 0;
+
+    // Desglose por Usuario (Cobrador)
     final Map<String, double> salesByUser = {};
-    for (var r in completedRecords) {
-      final userId = r.exitUserId ?? 'Desconocido';
-      final userName = _userNames[userId] ?? 'Desconocido';
-      salesByUser[userName] = (salesByUser[userName] ?? 0) + (r.cost ?? 0);
-    }
 
-    // Breakdown by Tariff Type
+    // Desglose por Tarifa
     final Map<String, double> salesByTariff = {};
-    for (var r in completedRecords) {
-      final tariff = r.tariff ?? 'General';
-      salesByTariff[tariff] = (salesByTariff[tariff] ?? 0) + (r.cost ?? 0);
+
+    for (var r in _todayRecords) {
+      // 1. Ingresos por Entrada (Prepago) hoy
+      if (r.entryTime.isAfter(startOfDay) && r.entryTime.isBefore(endOfDay)) {
+        final prepaid = r.amountPaid ?? 0;
+        if (prepaid > 0) {
+          calculatedTotal += prepaid;
+
+          // Asignar al usuario de entrada
+          final entryUser = _userNames[r.entryUserId] ?? 'Desconocido';
+          salesByUser[entryUser] = (salesByUser[entryUser] ?? 0) + prepaid;
+
+          // Asignar a tarifa (si existe, o 'Pago Adelantado')
+          final tariffName = r.tariff ?? 'Pago Adelantado';
+          salesByTariff[tariffName] =
+              (salesByTariff[tariffName] ?? 0) + prepaid;
+        }
+      }
+
+      // 2. Ingresos por Salida (Remanente) hoy
+      if (r.exitTime != null &&
+          r.exitTime!.isAfter(startOfDay) &&
+          r.exitTime!.isBefore(endOfDay)) {
+        final totalCost = r.cost ?? 0;
+        final alreadyPaid = r.amountPaid ?? 0;
+        final remaining = (totalCost - alreadyPaid) > 0
+            ? (totalCost - alreadyPaid)
+            : 0.0;
+
+        if (remaining > 0) {
+          calculatedTotal += remaining;
+
+          // Asignar al usuario de salida
+          final exitUser = _userNames[r.exitUserId] ?? 'Desconocido';
+          salesByUser[exitUser] = (salesByUser[exitUser] ?? 0) + remaining;
+
+          // Asignar a tarifa
+          final tariffName = r.tariff ?? 'General';
+          salesByTariff[tariffName] =
+              (salesByTariff[tariffName] ?? 0) + remaining;
+        }
+      }
     }
 
     return Scaffold(
@@ -203,17 +258,33 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
                       child: Column(
                         children: [
                           Text(
-                            DateFormat('EEEE d, MMMM y', 'es').format(_selectedDate),
-                            style: Theme.of(context).textTheme.titleLarge?.copyWith(color: Colors.white),
+                            DateFormat(
+                              'EEEE d, MMMM y',
+                              'es',
+                            ).format(_selectedDate),
+                            style: Theme.of(context).textTheme.titleLarge
+                                ?.copyWith(color: Colors.white),
                             textAlign: TextAlign.center,
                           ),
                           const SizedBox(height: 16),
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceAround,
                             children: [
-                              _buildSummaryItem('Ingresos', '${_todayRecords.length}', isDark: true),
-                              _buildSummaryItem('Ventas', '\$${totalCollected.toStringAsFixed(2)}', isDark: true),
-                              _buildSummaryItem('En Sitio', '${pendingRecords.length}', isDark: true),
+                              _buildSummaryItem(
+                                'Ingresos',
+                                '${_todayRecords.length}',
+                                isDark: true,
+                              ),
+                              _buildSummaryItem(
+                                'Ventas',
+                                '\$${calculatedTotal.toStringAsFixed(2)}',
+                                isDark: true,
+                              ),
+                              _buildSummaryItem(
+                                'En Sitio',
+                                '${pendingRecords.length}',
+                                isDark: true,
+                              ),
                             ],
                           ),
                         ],
@@ -224,17 +295,34 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
 
                   // Sales by User
                   if (salesByUser.isNotEmpty) ...[
-                    const Text('Ventas por Cobrador', 
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    const Text(
+                      'Ventas por Cobrador',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                     const SizedBox(height: 8),
                     Card(
                       child: Column(
-                        children: salesByUser.entries.map((e) => ListTile(
-                          leading: const Icon(Icons.person, color: Colors.blueGrey),
-                          title: Text(e.key),
-                          trailing: Text('\$${e.value.toStringAsFixed(2)}', 
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                        )).toList(),
+                        children: salesByUser.entries
+                            .map(
+                              (e) => ListTile(
+                                leading: const Icon(
+                                  Icons.person,
+                                  color: Colors.blueGrey,
+                                ),
+                                title: Text(e.key),
+                                trailing: Text(
+                                  '\$${e.value.toStringAsFixed(2)}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                            )
+                            .toList(),
                       ),
                     ),
                     const SizedBox(height: 24),
@@ -242,26 +330,48 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
 
                   // Sales by Tariff
                   if (salesByTariff.isNotEmpty) ...[
-                    const Text('Ventas por Tarifa', 
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    const Text(
+                      'Ventas por Tarifa',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                     const SizedBox(height: 8),
                     Card(
                       child: Column(
-                        children: salesByTariff.entries.map((e) => ListTile(
-                          leading: const Icon(Icons.price_change, color: Colors.green),
-                          title: Text(e.key),
-                          trailing: Text('\$${e.value.toStringAsFixed(2)}', 
-                              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                        )).toList(),
+                        children: salesByTariff.entries
+                            .map(
+                              (e) => ListTile(
+                                leading: const Icon(
+                                  Icons.price_change,
+                                  color: Colors.green,
+                                ),
+                                title: Text(e.key),
+                                trailing: Text(
+                                  '\$${e.value.toStringAsFixed(2)}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                            )
+                            .toList(),
                       ),
                     ),
                     const SizedBox(height: 24),
                   ],
-                  
+
                   // Pending List (Autos en resguardo)
                   if (pendingRecords.isNotEmpty) ...[
-                    const Text('Autos en Sitio (Posible Pensión/Nocturno)', 
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                    const Text(
+                      'Autos en Sitio (Posible Pensión/Nocturno)',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                     const SizedBox(height: 8),
                     ListView.builder(
                       shrinkWrap: true,
@@ -271,9 +381,14 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
                         final record = pendingRecords[index];
                         return Card(
                           child: ListTile(
-                            leading: const Icon(Icons.nightlight_round, color: Colors.indigo),
+                            leading: const Icon(
+                              Icons.nightlight_round,
+                              color: Colors.indigo,
+                            ),
                             title: Text(record.plate),
-                            subtitle: Text('Entrada: ${DateFormat('HH:mm').format(record.entryTime)} - ${record.clientType}'),
+                            subtitle: Text(
+                              'Entrada: ${DateFormat('HH:mm').format(record.entryTime)} - ${record.clientType}',
+                            ),
                             trailing: Text(record.notes ?? ''),
                           ),
                         );
@@ -283,8 +398,10 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
                   ],
 
                   // Completed List
-                  const Text('Detalle de Salidas', 
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  const Text(
+                    'Detalle de Salidas',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
                   const SizedBox(height: 8),
                   ListView.builder(
                     shrinkWrap: true,
@@ -294,11 +411,23 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
                       final record = completedRecords[index];
                       return Card(
                         child: ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          title: Text('${record.plate} - ${record.tariff ?? 'General'}'),
-                          subtitle: Text('${DateFormat('HH:mm').format(record.entryTime)} - ${DateFormat('HH:mm').format(record.exitTime!)}'),
-                          trailing: Text('\$${record.cost?.toStringAsFixed(2)}', 
-                              style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.green)),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 8,
+                          ),
+                          title: Text(
+                            '${record.plate} - ${record.tariff ?? 'General'}',
+                          ),
+                          subtitle: Text(
+                            '${DateFormat('HH:mm').format(record.entryTime)} - ${DateFormat('HH:mm').format(record.exitTime!)}',
+                          ),
+                          trailing: Text(
+                            '\$${record.cost?.toStringAsFixed(2)}',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green,
+                            ),
+                          ),
                         ),
                       );
                     },
@@ -313,18 +442,16 @@ class _DailyReportScreenState extends State<DailyReportScreen> {
     return Column(
       children: [
         Text(
-          value, 
+          value,
           style: TextStyle(
-            fontSize: 24, 
-            fontWeight: FontWeight.bold, 
-            color: isDark ? Colors.white : Colors.blue
-          )
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+            color: isDark ? Colors.white : Colors.blue,
+          ),
         ),
         Text(
-          label, 
-          style: TextStyle(
-            color: isDark ? Colors.white70 : Colors.grey
-          )
+          label,
+          style: TextStyle(color: isDark ? Colors.white70 : Colors.grey),
         ),
       ],
     );
