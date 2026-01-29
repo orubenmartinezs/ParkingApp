@@ -11,13 +11,13 @@ node_modules/
 npm-debug.log
 
 # Backend Secrets & Data
-app/backend/config.php
-app/backend/*.db
-app/backend/*.sqlite
-app/backend/*.log
-app/backend/logs/*
-!app/backend/logs/.gitkeep
-app/backend/sql/*.sql
+backend/config.php
+backend/*.db
+backend/*.sqlite
+backend/*.log
+backend/logs/*
+!backend/logs/.gitkeep
+backend/sql/*.sql
 *.sql
 *.csv
 *.xlsx
