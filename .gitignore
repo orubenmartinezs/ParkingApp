@@ -1,0 +1,30 @@
+# Mac
+.DS_Store
+
+# IDEs
+.vscode/
+.idea/
+*.iml
+
+# Node
+node_modules/
+npm-debug.log
+
+# Backend Secrets & Data
+app/backend/config.php
+app/backend/*.db
+app/backend/*.sqlite
+app/backend/*.log
+app/backend/logs/*
+!app/backend/logs/.gitkeep
+app/backend/sql/*.sql
+*.sql
+*.csv
+*.xlsx
+
+# Flutter (delegated to app/.gitignore mostly, but good to have here too)
+.dart_tool/
+build/
+.pub-cache/
+.packages
+pubspec.lock
