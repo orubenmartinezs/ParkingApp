@@ -165,6 +165,7 @@ require_once 'includes/header.php';
                         <th>Placa</th>
                         <th>Nombre / Notas</th>
                         <th>Tipo</th>
+                        <th>Ciclo</th>
                         <th>Mensualidad</th>
                         <th>Pagado Hasta</th>
                         <th>Estado</th>
@@ -183,6 +184,12 @@ require_once 'includes/header.php';
                             <?php endif; ?>
                         </td>
                         <td><?= htmlspecialchars($entryTypeMap[$s['entry_type_id']] ?? 'Desconocido') ?></td>
+                        <td>
+                            <?php
+                                $pMap = ['WEEKLY' => 'Semanal', 'BIWEEKLY' => 'Quincenal', 'MONTHLY' => 'Mensual'];
+                                echo htmlspecialchars($pMap[$s['periodicity'] ?? 'MONTHLY'] ?? $s['periodicity']);
+                            ?>
+                        </td>
                         <td>$<?= number_format($s['monthly_fee'], 2) ?></td>
                         <td>
                             <?php if ($s['paid_until']): ?>
@@ -201,10 +208,10 @@ require_once 'includes/header.php';
                             <?php endif; ?>
                         </td>
                         <td class="text-end">
-                            <button class="btn btn-sm btn-outline-info me-1" onclick="openEditSubscriberModal('<?= $s['id'] ?>', '<?= $s['plate'] ?>', '<?= $s['name'] ?>', '<?= $s['entry_type_id'] ?>', '<?= $s['monthly_fee'] ?>', '<?= $s['entry_date'] ?>', '<?= $s['paid_until'] ?>', `<?= htmlspecialchars($s['notes'] ?? '') ?>`)" title="Editar">
+                            <button class="btn btn-sm btn-outline-info me-1" onclick="openEditSubscriberModal('<?= $s['id'] ?>', '<?= $s['plate'] ?>', '<?= $s['name'] ?>', '<?= $s['entry_type_id'] ?>', '<?= $s['monthly_fee'] ?>', '<?= $s['entry_date'] ?>', '<?= $s['paid_until'] ?>', `<?= htmlspecialchars($s['notes'] ?? '') ?>`, '<?= $s['periodicity'] ?? 'MONTHLY' ?>')" title="Editar">
                                 <i class="bi bi-pencil"></i>
                             </button>
-                            <button class="btn btn-sm btn-success me-1" onclick="openPaymentModal('<?= $s['id'] ?>', '<?= $s['plate'] ?>', <?= $s['monthly_fee'] ?>, <?= $s['paid_until'] ?? 0 ?>)" title="Registrar Pago">
+                            <button class="btn btn-sm btn-success me-1" onclick="openPaymentModal('<?= $s['id'] ?>', '<?= $s['plate'] ?>', <?= $s['monthly_fee'] ?>, <?= $s['paid_until'] ?? 0 ?>, '<?= $s['periodicity'] ?? 'MONTHLY' ?>')" title="Registrar Pago">
                                 <i class="bi bi-cash-coin"></i>
                             </button>
                             <form method="POST" class="d-inline" onsubmit="return confirm('¿Cambiar estado de cuenta?');">
@@ -263,7 +270,15 @@ require_once 'includes/header.php';
                         </select>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Mensualidad ($)</label>
+                        <label class="form-label">Periodicidad de Pago</label>
+                        <select class="form-select" name="periodicity">
+                            <option value="WEEKLY">Semanal</option>
+                            <option value="BIWEEKLY">Quincenal</option>
+                            <option value="MONTHLY" selected>Mensual</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Monto de Cuota ($)</label>
                         <input type="number" step="0.01" class="form-control" name="monthly_fee" required>
                     </div>
                     <div class="mb-3">
@@ -388,7 +403,15 @@ function openPaymentModal(id, plate, fee, paidUntil) {
                         </select>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">Mensualidad ($)</label>
+                        <label class="form-label">Periodicidad de Pago</label>
+                        <select class="form-select" name="periodicity" id="edit_subscriber_periodicity">
+                            <option value="WEEKLY">Semanal</option>
+                            <option value="BIWEEKLY">Quincenal</option>
+                            <option value="MONTHLY">Mensual</option>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Monto de Cuota ($)</label>
                         <input type="number" step="0.01" class="form-control" name="monthly_fee" id="edit_subscriber_monthly_fee" required>
                     </div>
                     <div class="mb-3">
@@ -414,12 +437,13 @@ function openPaymentModal(id, plate, fee, paidUntil) {
 </div>
 
 <script>
-function openEditSubscriberModal(id, plate, name, entry_type_id, monthly_fee, entry_date, paid_until, notes) {
+function openEditSubscriberModal(id, plate, name, entry_type_id, monthly_fee, entry_date, paid_until, notes, periodicity) {
     document.getElementById('edit_subscriber_id').value = id;
     document.getElementById('edit_subscriber_plate').value = plate;
     document.getElementById('edit_subscriber_name').value = name;
     document.getElementById('edit_subscriber_entry_type').value = entry_type_id;
     document.getElementById('edit_subscriber_monthly_fee').value = monthly_fee;
+    document.getElementById('edit_subscriber_periodicity').value = periodicity || 'MONTHLY';
     
     if (entry_date) {
         // Handle milliseconds if present
