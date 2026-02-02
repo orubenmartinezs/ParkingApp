@@ -156,14 +156,16 @@ function upsertUser($pdo, $user) {
 // Helper to upsert entry type
 function upsertEntryType($pdo, $type) {
     $sql = "INSERT INTO entry_types (
-        id, name, default_tariff_id, is_active, is_synced
+        id, name, default_tariff_id, is_active, is_synced, is_default, should_print_ticket
     ) VALUES (
-        :id, :name, :default_tariff_id, :is_active, 1
+        :id, :name, :default_tariff_id, :is_active, 1, :is_default, :should_print_ticket
     ) ON DUPLICATE KEY UPDATE 
         name = VALUES(name),
         default_tariff_id = VALUES(default_tariff_id),
         is_active = VALUES(is_active),
-        is_synced = 1";
+        is_synced = 1,
+        is_default = VALUES(is_default),
+        should_print_ticket = VALUES(should_print_ticket)";
     
     $stmt = $pdo->prepare($sql);
     $stmt->execute([
@@ -171,6 +173,8 @@ function upsertEntryType($pdo, $type) {
         ':name' => $type['name'],
         ':default_tariff_id' => $type['default_tariff_id'] ?? null,
         ':is_active' => isset($type['is_active']) ? $type['is_active'] : 1,
+        ':is_default' => isset($type['is_default']) ? $type['is_default'] : 0,
+        ':should_print_ticket' => isset($type['should_print_ticket']) ? $type['should_print_ticket'] : 1,
     ]);
 }
 

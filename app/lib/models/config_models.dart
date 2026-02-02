@@ -44,6 +44,8 @@ class EntryType {
   final bool isActive;
   final bool isSynced;
   final String? defaultTariffId;
+  final bool shouldPrintTicket;
+  final bool isDefault;
 
   EntryType({
     required this.id,
@@ -51,6 +53,8 @@ class EntryType {
     this.isActive = true,
     this.isSynced = false,
     this.defaultTariffId,
+    this.shouldPrintTicket = true,
+    this.isDefault = false,
   });
 
   Map<String, dynamic> toMap() {
@@ -60,6 +64,8 @@ class EntryType {
       'is_active': isActive ? 1 : 0,
       'is_synced': isSynced ? 1 : 0,
       'default_tariff_id': defaultTariffId,
+      'should_print_ticket': shouldPrintTicket ? 1 : 0,
+      'is_default': isDefault ? 1 : 0,
     };
   }
 
@@ -70,6 +76,11 @@ class EntryType {
       isActive: map['is_active'] == 1,
       isSynced: map['is_synced'] == 1,
       defaultTariffId: map['default_tariff_id'],
+      shouldPrintTicket:
+          map['should_print_ticket'] == 1 ||
+          map['should_print_ticket'] ==
+              null, // Default to true if null (migration)
+      isDefault: map['is_default'] == 1,
     );
   }
 }
@@ -152,8 +163,10 @@ class TariffType {
       id: map['id'],
       name: map['name'],
       defaultCost: double.tryParse(map['default_cost'].toString()) ?? 0.0,
-      costFirstPeriod: double.tryParse(map['cost_first_period'].toString()) ?? 0.0,
-      costNextPeriod: double.tryParse(map['cost_next_period'].toString()) ?? 0.0,
+      costFirstPeriod:
+          double.tryParse(map['cost_first_period'].toString()) ?? 0.0,
+      costNextPeriod:
+          double.tryParse(map['cost_next_period'].toString()) ?? 0.0,
       periodMinutes: int.tryParse(map['period_minutes'].toString()) ?? 60,
       toleranceMinutes: int.tryParse(map['tolerance_minutes'].toString()) ?? 15,
       isActive: map['is_active'] == 1,

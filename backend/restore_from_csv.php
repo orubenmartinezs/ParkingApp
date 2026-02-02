@@ -218,8 +218,8 @@ require_once 'includes/header.php';
         <div class="card-body">
             <p>Sube el archivo CSV completado. El sistema vinculará automáticamente:</p>
             <ul>
-                <li><strong>Tipo de Cliente</strong> con la base de datos (Ej: 'GENERAL', 'PENSION').</li>
-                <li><strong>Tarifa</strong> con la base de datos (Ej: 'POR HORA').</li>
+                <li><strong>Tipo de Cliente</strong> con la base de datos (Ej: '<?= htmlspecialchars($exType1) ?>', '<?= htmlspecialchars($exType2) ?>').</li>
+                <li><strong>Tarifa</strong> con la base de datos (Ej: '<?= htmlspecialchars($exTariff) ?>').</li>
                 <li><strong>Usuarios</strong> (Recibido/Entregado) con los usuarios del sistema.</li>
                 <li><strong>Folio Pensión</strong> con el suscriptor correspondiente.</li>
             </ul>

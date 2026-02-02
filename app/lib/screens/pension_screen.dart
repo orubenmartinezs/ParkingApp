@@ -4,6 +4,7 @@ import 'package:uuid/uuid.dart';
 import 'package:intl/intl.dart';
 import '../models/pension_subscriber.dart';
 import '../models/pension_payment.dart';
+import '../config/constants.dart';
 import '../database/database_helper.dart';
 import '../services/sync_service.dart';
 import '../services/sound_service.dart';
@@ -78,8 +79,16 @@ class _PensionScreenState extends State<PensionScreen> {
     final nameController = TextEditingController();
     final notesController = TextEditingController();
     final feeController = TextEditingController(text: '0.0');
-    String entryType = 'NOCTURNO';
+
+    // Load dynamic entry types
+    final availableTypes = await _dbHelper.getActiveEntryTypes();
+    String entryType = availableTypes.isNotEmpty
+        ? availableTypes.first.name
+        : AppConstants.fallbackEntryTypeName; // Fallback only if DB is empty
+
     DateTime entryDate = DateTime.now();
+
+    if (!mounted) return;
 
     await showDialog(
       context: context,
@@ -179,14 +188,22 @@ class _PensionScreenState extends State<PensionScreen> {
                         border: OutlineInputBorder(),
                         prefixIcon: Icon(Icons.access_time),
                       ),
-                      items: ['NOCTURNO', 'DIA y NOCHE']
-                          .map(
-                            (type) => DropdownMenuItem(
-                              value: type,
-                              child: Text(type),
-                            ),
-                          )
-                          .toList(),
+                      items: availableTypes.isNotEmpty
+                          ? availableTypes
+                                .map(
+                                  (type) => DropdownMenuItem(
+                                    value: type.name,
+                                    child: Text(type.name),
+                                  ),
+                                )
+                                .toList()
+                          : [
+                              // Fallback items if DB is empty
+                              const DropdownMenuItem(
+                                value: AppConstants.fallbackEntryTypeName,
+                                child: Text(AppConstants.fallbackEntryTypeName),
+                              ),
+                            ],
                       onChanged: (value) {
                         if (value != null) {
                           setState(() {

@@ -7,6 +7,7 @@ import '../database/database_helper.dart';
 import '../models/parking_record.dart';
 import '../models/config_models.dart';
 import '../models/pension_subscriber.dart';
+import '../config/constants.dart';
 import '../services/sync_service.dart';
 import '../services/auth_service.dart';
 import '../services/sound_service.dart';
@@ -17,6 +18,10 @@ import 'admin_screen.dart';
 import 'daily_report_screen.dart';
 import 'financial_screen.dart';
 import 'settings_screen.dart';
+
+import 'printer_settings_screen.dart';
+import '../services/printer_service.dart';
+import '../widgets/ticket_preview_dialog.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -33,12 +38,19 @@ class _HomeScreenState extends State<HomeScreen> {
   List<TariffType> _tariffTypes = [];
   List<PensionSubscriber> _subscribers = [];
   bool _isLoading = true;
+  DateTime _selectedDate = DateTime.now();
+  bool _wasPrinterConnected = false;
 
   @override
   void initState() {
     super.initState();
     _loadConfigData();
     _refreshRecords();
+
+    // Init printer service (auto-connect)
+    _wasPrinterConnected = PrinterService.instance.isConnected;
+    PrinterService.instance.addListener(_onPrinterStatusChanged);
+    PrinterService.instance.init();
 
     // Escuchar cambios de sincronización para actualizar la UI
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -64,10 +76,24 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
-    // Nota: No podemos eliminar fácilmente el listener de context.read<SyncService>() aquí
-    // porque el contexto podría ser inválido. En una app real, usar un Stream o un patrón Provider específico.
-    // Para esta demostración, es aceptable.
+    PrinterService.instance.removeListener(_onPrinterStatusChanged);
     super.dispose();
+  }
+
+  void _onPrinterStatusChanged() {
+    final isConnected = PrinterService.instance.isConnected;
+    if (isConnected && !_wasPrinterConnected) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Impresora conectada'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+    _wasPrinterConnected = isConnected;
   }
 
   void _onSyncChanged() {
@@ -82,41 +108,72 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _refreshRecords() async {
     if (!mounted) return;
+    setState(() => _isLoading = true);
 
-    final records = await _dbHelper.getTodayAndActiveRecords(DateTime.now());
+    try {
+      final isToday = DateUtils.isSameDay(_selectedDate, DateTime.now());
+      List<ParkingRecord> records = [];
 
-    if (mounted) {
-      setState(() {
-        _records = records;
-        _isLoading = false;
-      });
+      if (isToday) {
+        records = await _dbHelper.getTodayAndActiveRecords(DateTime.now());
+      } else {
+        // Búsqueda Histórica
+        final syncService = context.read<SyncService>();
+        if (syncService.isOnline) {
+          try {
+            records = await syncService.getRecordsByDate(_selectedDate);
+          } catch (e) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Error al consultar servidor: $e')),
+            );
+          }
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Opción no disponible por el momento, intente más tarde',
+              ),
+            ),
+          );
+        }
+      }
+
+      if (mounted) {
+        setState(() {
+          _records = records;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
+
+  // ... (Rest of the Dialog methods: _showAddRecordDialog, _processNewEntry, _showExitDialog, _processExit, _showAboutDialog)
+  // I will include them below to ensure full file integrity.
 
   Future<void> _showAddRecordDialog() async {
     final plateController = TextEditingController();
     final descriptionController = TextEditingController();
     final notesController = TextEditingController();
-    final amountPaidController = TextEditingController(text: '0.00'); // New
+    final amountPaidController = TextEditingController(text: '0.00');
     String? selectedEntryTypeId;
     String? selectedUserId;
     bool isPension = false;
     String? selectedSubscriberId;
     DateTime selectedEntryTime = DateTime.now();
-    String paymentStatus = 'PENDING'; // Nuevo
+    String paymentStatus = 'PENDING';
 
-    // Por defecto el primer tipo de ingreso si está disponible, o 'PARTICULAR' si existe
     if (_entryTypes.isNotEmpty) {
       try {
-        selectedEntryTypeId = _entryTypes
-            .firstWhere((e) => e.name == 'PARTICULAR')
-            .id;
+        selectedEntryTypeId = _entryTypes.firstWhere((e) => e.isDefault).id;
       } catch (_) {
         selectedEntryTypeId = _entryTypes.first.id;
       }
     }
 
-    // Por defecto el usuario actual si está disponible
     if (AuthService.instance.currentUser != null) {
       selectedUserId = AuthService.instance.currentUser!.id;
     } else if (_users.isNotEmpty) {
@@ -128,7 +185,6 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (context) => StatefulBuilder(
         builder: (context, setState) {
           final width = MediaQuery.of(context).size.width;
-          // Hacerlo más ancho en tabletas (600px o 90% en móviles)
           final dialogWidth = width > 600 ? 600.0 : width * 0.9;
 
           return Dialog(
@@ -153,13 +209,11 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          // 1. Placa
                           Autocomplete<String>(
                             optionsBuilder:
                                 (TextEditingValue textEditingValue) async {
-                                  if (textEditingValue.text.length < 2) {
+                                  if (textEditingValue.text.length < 2)
                                     return const Iterable<String>.empty();
-                                  }
                                   return await _dbHelper.getPlateSuggestions(
                                     textEditingValue.text,
                                   );
@@ -182,19 +236,16 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ),
                                     textCapitalization:
                                         TextCapitalization.characters,
-                                    onChanged: (value) {
-                                      plateController.text = value;
-                                    },
+                                    onChanged: (value) =>
+                                        plateController.text = value,
                                   );
                                 },
                           ),
-                          // 2. Descripción
                           Autocomplete<String>(
                             optionsBuilder:
                                 (TextEditingValue textEditingValue) async {
-                                  if (textEditingValue.text.length < 2) {
+                                  if (textEditingValue.text.length < 2)
                                     return const Iterable<String>.empty();
-                                  }
                                   return await _dbHelper
                                       .getDescriptionSuggestions(
                                         textEditingValue.text,
@@ -216,15 +267,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                     decoration: const InputDecoration(
                                       labelText: 'Descripción (Marca/Color)',
                                     ),
-                                    onChanged: (value) {
-                                      descriptionController.text = value;
-                                    },
+                                    onChanged: (value) =>
+                                        descriptionController.text = value,
                                   );
                                 },
                           ),
                           const SizedBox(height: 16),
-
-                          // Fecha y Hora de Ingreso
                           Row(
                             children: [
                               Expanded(
@@ -284,8 +332,6 @@ class _HomeScreenState extends State<HomeScreen> {
                             ],
                           ),
                           const SizedBox(height: 16),
-
-                          // Checkbox de Pensión
                           CheckboxListTile(
                             title: const Text('¿Es Pensión?'),
                             value: isPension,
@@ -297,7 +343,6 @@ class _HomeScreenState extends State<HomeScreen> {
                             },
                             contentPadding: EdgeInsets.zero,
                           ),
-
                           if (isPension && _subscribers.isNotEmpty)
                             DropdownButtonFormField<String>(
                               initialValue: selectedSubscriberId,
@@ -315,9 +360,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               onChanged: (value) =>
                                   setState(() => selectedSubscriberId = value),
                             ),
-
-                          // 3. Tipo de Ingreso (¿solo si no es pensión, o permitir ambos?)
-                          // El usuario pidió "Tipo de Ingreso" como 3er campo.
                           if (!isPension && _entryTypes.isNotEmpty)
                             DropdownButtonFormField<String>(
                               initialValue: selectedEntryTypeId,
@@ -335,8 +377,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               onChanged: (value) =>
                                   setState(() => selectedEntryTypeId = value),
                             ),
-
-                          // SECCIÓN DE PREPAGO
                           if (!isPension) ...[
                             const SizedBox(height: 16),
                             const Text(
@@ -359,13 +399,11 @@ class _HomeScreenState extends State<HomeScreen> {
                                     onChanged: (value) {
                                       final amount =
                                           double.tryParse(value) ?? 0.0;
-                                      if (amount > 0) {
-                                        setState(() => paymentStatus = 'PAID');
-                                      } else {
-                                        setState(
-                                          () => paymentStatus = 'PENDING',
-                                        );
-                                      }
+                                      setState(
+                                        () => paymentStatus = amount > 0
+                                            ? 'PAID'
+                                            : 'PENDING',
+                                      );
                                     },
                                   ),
                                 ),
@@ -397,10 +435,7 @@ class _HomeScreenState extends State<HomeScreen> {
                               ],
                             ),
                           ],
-
                           const SizedBox(height: 16),
-
-                          // 4. Recibido por
                           if (_users.isNotEmpty)
                             DropdownButtonFormField<String>(
                               initialValue: selectedUserId,
@@ -418,8 +453,6 @@ class _HomeScreenState extends State<HomeScreen> {
                               onChanged: (value) =>
                                   setState(() => selectedUserId = value),
                             ),
-
-                          // 5. Comentarios
                           TextField(
                             controller: notesController,
                             decoration: const InputDecoration(
@@ -481,7 +514,6 @@ class _HomeScreenState extends State<HomeScreen> {
     double amountPaid,
     String paymentStatus,
   ) async {
-    // Check if it's a subscriber (either selected or by plate)
     PensionSubscriber? subscriber;
     if (subscriberId != null) {
       try {
@@ -491,12 +523,23 @@ class _HomeScreenState extends State<HomeScreen> {
       subscriber = await _dbHelper.getSubscriberByPlate(plate);
     }
 
-    String clientType = 'GENERAL';
+    // 1. Determine Client Type / Entry Type Name
+    String clientType = AppConstants.fallbackEntryTypeName; // Fallback
+
+    // Try to find default type from loaded list
+    if (_entryTypes.isNotEmpty) {
+      try {
+        final defaultType = _entryTypes.firstWhere((e) => e.isDefault);
+        clientType = defaultType.name;
+      } catch (_) {
+        clientType = _entryTypes.first.name;
+      }
+    }
+
     String? finalNotes = notes.isNotEmpty ? notes : null;
 
     if (subscriber != null) {
       clientType = subscriber.entryType;
-      // Append pension info to notes if exists, or start with it
       if (finalNotes != null) {
         finalNotes = 'Pensión Mensual - ${subscriber.name}. $finalNotes';
       } else {
@@ -508,11 +551,6 @@ class _HomeScreenState extends State<HomeScreen> {
         clientType = type.name;
       } catch (_) {}
     }
-
-    // NEW: Get next folio manually if needed, but the database helper handles it now
-    // We just create the object. The helper will assign the folio if it's null,
-    // but the model requires an integer? Let's check the model.
-    // The model says folio is nullable int.
 
     final newRecord = ParkingRecord(
       id: const Uuid().v4(),
@@ -530,7 +568,21 @@ class _HomeScreenState extends State<HomeScreen> {
     );
 
     try {
+      // Get record with Folio (insertRecord assigns folio if needed via DB trigger/autoincrement,
+      // but sqflite usually returns int ID. Our ID is UUID string.
+      // ParkingRecord has 'folio' field. We need to fetch the inserted record to get the generated folio if handled by DB.
+      // However, current insertRecord implementation just inserts.
+      // Let's assume we need to re-fetch the record or that insertRecord handles it.
+      // Checking DatabaseHelper: insertRecord returns int (row id), but we pass UUID.
+      // Let's assume we proceed with the object we have. If folio is generated by DB, we might miss it here.
+      // Ideally, we should fetch the latest record for this UUID to get the Folio.
+
       await _dbHelper.insertRecord(newRecord);
+
+      // Fetch fresh record to get generated fields (like folio if any)
+      final savedRecord =
+          (await _dbHelper.getRecordById(newRecord.id)) ?? newRecord;
+
       await _refreshRecords();
 
       if (mounted) {
@@ -539,9 +591,35 @@ class _HomeScreenState extends State<HomeScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Ingreso registrado: $plate ($clientType)')),
         );
+
+        // Auto-Print Entry Ticket if connected
+        bool shouldPrint = true;
+
+        if (PrinterService.instance.isConnected) {
+          // 1. Check Pension (Business Rule: Subscribers don't get tickets by default)
+          if (savedRecord.pensionSubscriberId != null) {
+            shouldPrint = false;
+          }
+
+          // 2. Check EntryType configuration
+          // This allows dynamic control via Backend/Admin
+          if (shouldPrint && savedRecord.entryTypeId != null) {
+            try {
+              final type = _entryTypes.firstWhere(
+                (e) => e.id == savedRecord.entryTypeId,
+              );
+              shouldPrint = type.shouldPrintTicket;
+            } catch (_) {
+              // If type not found locally, keep current value
+            }
+          }
+
+          if (shouldPrint) {
+            await PrinterService.instance.printEntryTicket(savedRecord);
+          }
+        }
       }
     } catch (e) {
-      print("ERROR SAVING RECORD: $e");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -555,42 +633,47 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _showExitDialog(ParkingRecord record) async {
     DateTime currentEntryTime = record.entryTime;
-
-    // Check if it is a pension subscriber
+    DateTime selectedExitTime =
+        DateTime.now(); // Nueva variable para hora de salida
     final subscriber = record.pensionSubscriberId != null
         ? await _dbHelper.getSubscriberById(record.pensionSubscriberId!)
         : await _dbHelper.getSubscriberByPlate(record.plate);
 
     bool isSubscriber =
-        record.pensionSubscriberId != null ||
-        subscriber != null ||
-        [
-          'NOCTURNO',
-          'DIA y NOCHE',
-          'PENSION',
-        ].contains(record.clientType.toUpperCase()) ||
-        (record.notes?.toLowerCase().contains('pensión') ?? false);
+        record.pensionSubscriberId != null || subscriber != null;
 
     final costController = TextEditingController();
     String? selectedTariffTypeId;
     String? selectedUserId;
+    String entryTypeName = 'General'; // Default
 
-    // Initial Tariff Selection
+    // Obtener nombre del tipo de entrada para mostrar
+    if (record.entryTypeId != null && _entryTypes.isNotEmpty) {
+      try {
+        final type = _entryTypes.firstWhere((e) => e.id == record.entryTypeId);
+        entryTypeName = type.name;
+      } catch (_) {}
+    } else if (record.clientType != null && record.clientType!.isNotEmpty) {
+      entryTypeName = record.clientType!;
+    }
+
     if (_tariffTypes.isNotEmpty) {
       if (isSubscriber) {
-        try {
-          final pensionTariff = _tariffTypes.firstWhere(
-            (t) =>
-                t.name.toUpperCase().contains('PENSIÓN') ||
-                t.name.toUpperCase().contains('PENSION'),
-            orElse: () => _tariffTypes.first,
-          );
-          selectedTariffTypeId = pensionTariff.id;
-        } catch (_) {}
-      } else if (record.clientType == 'IBMH') {
-        // Keep calculated cost
+        // Try to find a tariff associated with the record's entry type, otherwise use the first one
+        if (record.entryTypeId != null) {
+          try {
+            final entryType = _entryTypes.firstWhere(
+              (e) => e.id == record.entryTypeId,
+            );
+            if (entryType.defaultTariffId != null) {
+              selectedTariffTypeId = entryType.defaultTariffId;
+            }
+          } catch (_) {}
+        }
+        if (selectedTariffTypeId == null) {
+          selectedTariffTypeId = _tariffTypes.first.id;
+        }
       } else {
-        // Check if Entry Type has a default tariff linked
         bool tariffFound = false;
         if (record.entryTypeId != null) {
           try {
@@ -598,7 +681,6 @@ class _HomeScreenState extends State<HomeScreen> {
               (e) => e.id == record.entryTypeId,
             );
             if (entryType.defaultTariffId != null) {
-              // Check if tariff exists in active tariffs
               if (_tariffTypes.any((t) => t.id == entryType.defaultTariffId)) {
                 selectedTariffTypeId = entryType.defaultTariffId;
                 tariffFound = true;
@@ -608,18 +690,11 @@ class _HomeScreenState extends State<HomeScreen> {
         }
 
         if (!tariffFound) {
-          try {
-            selectedTariffTypeId = _tariffTypes
-                .firstWhere((t) => t.name == 'POR HORA')
-                .id;
-          } catch (_) {
-            selectedTariffTypeId = _tariffTypes.first.id;
-          }
+          selectedTariffTypeId = _tariffTypes.first.id;
         }
       }
     }
 
-    // Default User
     if (AuthService.instance.currentUser != null) {
       selectedUserId = AuthService.instance.currentUser!.id;
     } else if (_users.isNotEmpty) {
@@ -627,46 +702,60 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     void calculateCost() {
-      final duration = DateTime.now().difference(currentEntryTime);
+      // Usar selectedExitTime en lugar de DateTime.now()
+      final duration = selectedExitTime.difference(currentEntryTime);
       final hours = duration.inMinutes / 60.0;
       double newCost = 0.0;
 
       if (isSubscriber) {
         newCost = 0.0;
-      } else if (record.clientType == 'IBMH') {
-        newCost = 30.0;
-      } else if (record.clientType == 'IDNTA') {
-        newCost = 100.0;
-      } else if (record.clientType == 'COOD') {
-        newCost = 60.0;
       } else {
-        // Check Tariff Type
         if (selectedTariffTypeId != null) {
           try {
             final type = _tariffTypes.firstWhere(
               (t) => t.id == selectedTariffTypeId,
             );
-            if (type.name == 'PENSIÓN') {
+
+            // Exact Formula Calculation
+            final int durationMinutes = duration.inMinutes;
+            final int tolerance = type.toleranceMinutes;
+            final int period = type.periodMinutes > 0 ? type.periodMinutes : 60;
+            final double costFirst = type.costFirstPeriod;
+            final double costNext = type.costNextPeriod;
+            final double defaultCost = type.defaultCost;
+
+            // 1. Tolerance Check
+            if (durationMinutes <= tolerance) {
               newCost = 0.0;
-            } else if (type.name == 'COMPLETO') {
-              newCost = 100.0;
-            } else if (type.name == 'MEDIO DIA') {
-              newCost = 60.0;
             } else {
-              newCost = (hours.ceil() * 25.0).toDouble();
+              // 2. Logic: First Period + Next Periods
+              // If we are here, we exceeded tolerance.
+              // Usually, you pay at least the first period.
+
+              // If costs are not configured (0), fallback to defaultCost * hours
+              if (costFirst == 0 && costNext == 0) {
+                final hours = durationMinutes / 60.0;
+                newCost = (hours.ceil() * defaultCost).toDouble();
+              } else {
+                newCost = costFirst;
+
+                int remainingMinutes = durationMinutes - period;
+                if (remainingMinutes > 0) {
+                  final int nextPeriods = (remainingMinutes / period).ceil();
+                  newCost += nextPeriods * costNext;
+                }
+              }
             }
           } catch (_) {
-            newCost = (hours.ceil() * 25.0).toDouble();
+            newCost = 0.0;
           }
         } else {
-          newCost = (hours.ceil() * 25.0).toDouble();
+          newCost = 0.0;
         }
       }
-
       costController.text = newCost.toStringAsFixed(2);
     }
 
-    // Initial calculation
     calculateCost();
 
     await showDialog(
@@ -675,7 +764,8 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (context, setState) {
           final width = MediaQuery.of(context).size.width;
           final dialogWidth = width > 600 ? 600.0 : width * 0.9;
-          final duration = DateTime.now().difference(currentEntryTime);
+          // Calcular duración basada en la hora de salida seleccionada
+          final duration = selectedExitTime.difference(currentEntryTime);
 
           return Dialog(
             insetPadding: const EdgeInsets.symmetric(
@@ -693,6 +783,15 @@ class _HomeScreenState extends State<HomeScreen> {
                     'Salida: ${record.plate}',
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
+                  const SizedBox(height: 8),
+                  // Mostrar Tipo de Ingreso
+                  Text(
+                    'Tipo: $entryTypeName',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Colors.grey[700],
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                   const SizedBox(height: 24),
                   Flexible(
                     child: SingleChildScrollView(
@@ -700,23 +799,37 @@ class _HomeScreenState extends State<HomeScreen> {
                         mainAxisSize: MainAxisSize.min,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Entry Time Editor
+                          // Hora de Ingreso (Solo Lectura)
+                          InputDecorator(
+                            decoration: const InputDecoration(
+                              labelText: 'Hora de Ingreso',
+                              border: OutlineInputBorder(),
+                              filled: true,
+                              fillColor: Color(
+                                0xFFF5F5F5,
+                              ), // Gris claro para indicar disabled
+                            ),
+                            child: Text(
+                              DateFormat(
+                                'dd/MM/yyyy HH:mm',
+                              ).format(currentEntryTime),
+                              style: const TextStyle(fontSize: 16),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          // Hora de Salida (Editable)
                           Row(
                             children: [
                               Expanded(
                                 child: InputDecorator(
                                   decoration: const InputDecoration(
-                                    labelText: 'Hora de Ingreso (Ajuste)',
+                                    labelText: 'Hora de Salida',
                                     border: OutlineInputBorder(),
-                                    contentPadding: EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 8,
-                                    ),
                                   ),
                                   child: Text(
                                     DateFormat(
                                       'dd/MM/yyyy HH:mm',
-                                    ).format(currentEntryTime),
+                                    ).format(selectedExitTime),
                                     style: const TextStyle(fontSize: 16),
                                   ),
                                 ),
@@ -730,8 +843,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                 onPressed: () async {
                                   final date = await showDatePicker(
                                     context: context,
-                                    initialDate: currentEntryTime,
-                                    firstDate: DateTime(2020),
+                                    initialDate: selectedExitTime,
+                                    firstDate:
+                                        currentEntryTime, // No salir antes de entrar
                                     lastDate: DateTime.now().add(
                                       const Duration(days: 1),
                                     ),
@@ -740,12 +854,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                     final time = await showTimePicker(
                                       context: context,
                                       initialTime: TimeOfDay.fromDateTime(
-                                        currentEntryTime,
+                                        selectedExitTime,
                                       ),
                                     );
                                     if (time != null) {
                                       setState(() {
-                                        currentEntryTime = DateTime(
+                                        selectedExitTime = DateTime(
                                           date.year,
                                           date.month,
                                           date.day,
@@ -777,20 +891,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                   color: Colors.green.withOpacity(0.3),
                                 ),
                               ),
-                              child: Row(
-                                children: const [
-                                  Icon(Icons.verified, color: Colors.green),
-                                  SizedBox(width: 8),
-                                  Expanded(
-                                    child: Text(
-                                      'Vehículo de Pensión detectado.\nEl costo será de \$0.00',
-                                      style: TextStyle(
-                                        color: Colors.green,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ),
-                                ],
+                              child: const Text(
+                                'Vehículo de Pensión detectado. Costo \$0.00',
+                                style: TextStyle(
+                                  color: Colors.green,
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                             ),
                           if (_tariffTypes.isNotEmpty)
@@ -834,63 +940,13 @@ class _HomeScreenState extends State<HomeScreen> {
                               onChanged: (value) =>
                                   setState(() => selectedUserId = value),
                             ),
-                          if ((record.amountPaid ?? 0) > 0)
-                            Container(
-                              margin: const EdgeInsets.only(bottom: 16),
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: Colors.blue.withOpacity(0.1),
-                                borderRadius: BorderRadius.circular(8),
-                                border: Border.all(
-                                  color: Colors.blue.withOpacity(0.3),
-                                ),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      const Icon(
-                                        Icons.payment,
-                                        color: Colors.blue,
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        'Pago Anticipado: \$${record.amountPaid!.toStringAsFixed(2)}',
-                                        style: const TextStyle(
-                                          color: Colors.blue,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  if (record.paymentStatus != null)
-                                    Padding(
-                                      padding: const EdgeInsets.only(
-                                        left: 32,
-                                        top: 4,
-                                      ),
-                                      child: Text(
-                                        'Estado: ${record.paymentStatus == 'PAID' ? 'Pagado' : record.paymentStatus}',
-                                        style: TextStyle(
-                                          color: Colors.blue.shade700,
-                                          fontSize: 12,
-                                        ),
-                                      ),
-                                    ),
-                                ],
-                              ),
-                            ),
                           const SizedBox(height: 16),
                           TextField(
                             controller: costController,
                             readOnly: isSubscriber,
-                            decoration: InputDecoration(
+                            decoration: const InputDecoration(
                               labelText: 'Costo Final (\$)',
                               prefixText: '\$',
-                              helperText: isSubscriber
-                                  ? 'Costo fijo para pensiones'
-                                  : 'Puede ajustar el costo si es necesario',
                             ),
                             keyboardType: const TextInputType.numberWithOptions(
                               decimal: true,
@@ -913,7 +969,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         onPressed: () {
                           final finalCost =
                               double.tryParse(costController.text) ?? 0.0;
-                          String tariffName = 'GENERAL';
+                          String tariffName = '';
+                          if (_tariffTypes.isNotEmpty) {
+                            tariffName = _tariffTypes.first.name;
+                          }
                           try {
                             tariffName = _tariffTypes
                                 .firstWhere((t) => t.id == selectedTariffTypeId)
@@ -927,6 +986,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             selectedTariffTypeId,
                             selectedUserId,
                             currentEntryTime,
+                            selectedExitTime,
                           );
                           Navigator.pop(context);
                         },
@@ -950,6 +1010,7 @@ class _HomeScreenState extends State<HomeScreen> {
     String? tariffTypeId,
     String? userId,
     DateTime entryTime,
+    DateTime exitTime,
   ) async {
     String newPaymentStatus = record.paymentStatus ?? 'PENDING';
     final amountPaid = record.amountPaid ?? 0.0;
@@ -966,12 +1027,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final updatedRecord = record.copyWith(
       entryTime: entryTime,
-      exitTime: DateTime.now(),
+      exitTime: exitTime,
       cost: cost,
       tariff: tariffName,
       tariffTypeId: tariffTypeId,
       exitUserId: userId,
-      isSynced: false, // Needs sync again
+      isSynced: false,
       paymentStatus: newPaymentStatus,
     );
 
@@ -984,159 +1045,682 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _showAboutDialog() async {
-    final packageInfo = await PackageInfo.fromPlatform();
+  // CRUD Update Logic for Admin
+  Future<void> _showEditDialog(ParkingRecord record) async {
+    // Reusing the Add Dialog logic but pre-filled
+    // For brevity, I'll create a simplified version or reuse logic.
+    // Given the constraints, I'll implement a dedicated Edit Dialog.
 
-    if (!mounted) return;
+    final plateController = TextEditingController(text: record.plate);
+    final descriptionController = TextEditingController(
+      text: record.description,
+    );
+    final notesController = TextEditingController(text: record.notes);
+    final amountPaidController = TextEditingController(
+      text: (record.amountPaid ?? 0.0).toString(),
+    );
+    DateTime selectedEntryTime = record.entryTime;
+    String paymentStatus = record.paymentStatus ?? 'PENDING';
 
-    showDialog(
+    // ... (More fields if needed)
+
+    await showDialog(
       context: context,
-      builder: (context) {
-        final width = MediaQuery.of(context).size.width;
-        final dialogWidth = width > 600 ? 600.0 : width * 0.9;
-
-        return Dialog(
-          insetPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 24,
-          ),
-          child: Container(
-            width: dialogWidth,
-            padding: const EdgeInsets.all(24.0),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) {
+          return Dialog(
+            child: Container(
+              padding: const EdgeInsets.all(24),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Icon(Icons.info_outline, color: Colors.blue),
-                    const SizedBox(width: 10),
                     Text(
-                      'Acerca de',
+                      'Editar Registro',
                       style: Theme.of(context).textTheme.headlineSmall,
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: plateController,
+                      decoration: const InputDecoration(labelText: 'Placa'),
+                    ),
+                    TextField(
+                      controller: descriptionController,
+                      decoration: const InputDecoration(
+                        labelText: 'Descripción',
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: InputDecorator(
+                            decoration: const InputDecoration(
+                              labelText: 'Hora de Ingreso',
+                              border: OutlineInputBorder(),
+                            ),
+                            child: Text(
+                              DateFormat(
+                                'dd/MM/yyyy HH:mm',
+                              ).format(selectedEntryTime),
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.edit_calendar),
+                          onPressed: () async {
+                            final date = await showDatePicker(
+                              context: context,
+                              initialDate: selectedEntryTime,
+                              firstDate: DateTime(2020),
+                              lastDate: DateTime.now().add(
+                                const Duration(days: 1),
+                              ),
+                            );
+                            if (date != null && context.mounted) {
+                              final time = await showTimePicker(
+                                context: context,
+                                initialTime: TimeOfDay.fromDateTime(
+                                  selectedEntryTime,
+                                ),
+                              );
+                              if (time != null) {
+                                setState(() {
+                                  selectedEntryTime = DateTime(
+                                    date.year,
+                                    date.month,
+                                    date.day,
+                                    time.hour,
+                                    time.minute,
+                                  );
+                                });
+                              }
+                            }
+                          },
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: amountPaidController,
+                      decoration: const InputDecoration(
+                        labelText: 'Monto Pagado',
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                    DropdownButtonFormField<String>(
+                      value: paymentStatus,
+                      items: const [
+                        DropdownMenuItem(
+                          value: 'PENDING',
+                          child: Text('Pendiente'),
+                        ),
+                        DropdownMenuItem(value: 'PAID', child: Text('Pagado')),
+                        DropdownMenuItem(
+                          value: 'PARTIAL',
+                          child: Text('Parcial'),
+                        ),
+                      ],
+                      onChanged: (v) => setState(() => paymentStatus = v!),
+                    ),
+                    TextField(
+                      controller: notesController,
+                      decoration: const InputDecoration(labelText: 'Notas'),
+                    ),
+                    const SizedBox(height: 24),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancelar'),
+                        ),
+                        ElevatedButton(
+                          onPressed: () async {
+                            final updated = record.copyWith(
+                              plate: plateController.text,
+                              description: descriptionController.text,
+                              entryTime: selectedEntryTime,
+                              amountPaid:
+                                  double.tryParse(amountPaidController.text) ??
+                                  0.0,
+                              paymentStatus: paymentStatus,
+                              notes: notesController.text,
+                              isSynced: false,
+                            );
+                            await _dbHelper.updateRecord(updated);
+                            _refreshRecords();
+                            if (mounted) Navigator.pop(context);
+                          },
+                          child: const Text('Guardar'),
+                        ),
+                      ],
                     ),
                   ],
                 ),
-                const SizedBox(height: 24),
-                Image.asset('Parking_icon.png', width: 80, height: 80),
-                const SizedBox(height: 16),
-                const Text(
-                  'Parking Control',
-                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _showAboutDialog() async {
+    final packageInfo = await PackageInfo.fromPlatform();
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Acerca de'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'Parking Control',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            Text('Versión: ${packageInfo.version}'),
+            const SizedBox(height: 16),
+            const Text('Taranja Digital'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cerrar'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    final entries = _records.length;
+    final exits = _records.where((r) => r.exitTime != null).length;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Theme.of(context).primaryColor,
+        borderRadius: const BorderRadius.only(
+          bottomLeft: Radius.circular(20),
+          bottomRight: Radius.circular(20),
+        ),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                DateFormat(
+                  'EEEE, d MMMM',
+                  'es',
+                ).format(_selectedDate).toUpperCase(),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
                 ),
-                const SizedBox(height: 8),
-                Text('Versión: ${packageInfo.version}'),
-                Text('Build: ${packageInfo.buildNumber}'),
-                const SizedBox(height: 16),
-                const Divider(),
-                const SizedBox(height: 8),
-                const Text(
-                  'Desarrollado por:',
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
-                ),
-                const SizedBox(height: 4),
-                const Text(
-                  'Taranja Digital',
-                  style: TextStyle(fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 20),
+              ),
+              IconButton(
+                icon: const Icon(Icons.calendar_month, color: Colors.white),
+                onPressed: () async {
+                  final picked = await showDatePicker(
+                    context: context,
+                    initialDate: _selectedDate,
+                    firstDate: DateTime(2023),
+                    lastDate: DateTime.now(),
+                    locale: const Locale('es', 'ES'),
+                  );
+                  if (picked != null) {
+                    setState(() => _selectedDate = picked);
+                    _refreshRecords();
+                  }
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildSummaryItem('Ingresos', '$entries', Icons.arrow_downward),
+              _buildSummaryItem('Salidas', '$exits', Icons.arrow_upward),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryItem(String label, String value, IconData icon) {
+    return Column(
+      children: [
+        Icon(icon, color: Colors.white70),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        Text(
+          label,
+          style: const TextStyle(color: Colors.white70, fontSize: 12),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _confirmDeleteRecord(String id) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Confirmar Eliminación'),
+        content: const Text(
+          '¿Estás seguro de eliminar este registro? Esta acción no se puede deshacer.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancelar'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Eliminar'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      await _dbHelper.deleteRecord(id);
+      _refreshRecords();
+    }
+  }
+
+  Widget _buildParkingCard(ParkingRecord record) {
+    final isCompleted = record.exitTime != null;
+    String durationText = '';
+    if (isCompleted) {
+      final duration = record.exitTime!.difference(record.entryTime);
+      durationText = '${duration.inHours}h ${duration.inMinutes % 60}m';
+    }
+
+    // Resolver Nombre de Usuario que recibió
+    final entryUserName = _users
+        .firstWhere(
+          (u) => u.id == record.entryUserId,
+          orElse: () => User(
+            id: '',
+            name: 'Desc.',
+            role: 'USER',
+            pin: '',
+            isActive: true,
+          ),
+        )
+        .name;
+
+    // Resolver Nombre de Tipo de Entrada (Fix SIN_CATEGORIA)
+    String displayEntryType = record.clientType ?? 'General';
+    if (displayEntryType == 'SIN_CATEGORIA') {
+      if (record.entryTypeId != null && _entryTypes.isNotEmpty) {
+        try {
+          displayEntryType = _entryTypes
+              .firstWhere((e) => e.id == record.entryTypeId)
+              .name;
+        } catch (_) {
+          displayEntryType = 'General';
+        }
+      } else {
+        displayEntryType = 'General';
+      }
+    }
+
+    // Resolver Estado de Pago (Traducción)
+    String paymentStatusText = 'Pendiente';
+    if (record.paymentStatus == 'PAID') {
+      paymentStatusText = 'Pagado';
+    } else if (record.paymentStatus == 'PARTIAL') {
+      paymentStatusText = 'Parcial';
+    }
+
+    return Card(
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header: Placa y Estado
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
                 Text(
-                  '© ${DateTime.now().year} Todos los derechos reservados',
-                  style: const TextStyle(fontSize: 10, color: Colors.grey),
+                  record.plate,
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
-                const SizedBox(height: 24),
-                Align(
-                  alignment: Alignment.centerRight,
-                  child: TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Cerrar'),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: isCompleted
+                        ? Colors.red.withOpacity(0.1)
+                        : Colors.green.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(4),
+                    border: Border.all(
+                      color: isCompleted ? Colors.red : Colors.green,
+                    ),
+                  ),
+                  child: Text(
+                    isCompleted ? 'SALIDA' : 'EN SITIO',
+                    style: TextStyle(
+                      color: isCompleted ? Colors.red : Colors.green,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
                   ),
                 ),
               ],
             ),
-          ),
-        );
-      },
+            const SizedBox(height: 8),
+
+            // Descripción y Tipo
+            Text(
+              '${record.description ?? "Sin descripción"} • $displayEntryType',
+              style: TextStyle(color: Colors.grey[700], fontSize: 14),
+            ),
+            const Divider(),
+
+            // Detalles Grid
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildDetailRow(
+                        Icons.login,
+                        'Entrada',
+                        DateFormat('dd/MM HH:mm').format(record.entryTime),
+                      ),
+                      const SizedBox(height: 4),
+                      _buildDetailRow(Icons.person, 'Recibió', entryUserName),
+                    ],
+                  ),
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (isCompleted)
+                        _buildDetailRow(
+                          Icons.logout,
+                          'Salida',
+                          DateFormat('dd/MM HH:mm').format(record.exitTime!),
+                        ),
+                      const SizedBox(height: 4),
+                      _buildDetailRow(
+                        Icons.payment,
+                        'Estado',
+                        paymentStatusText,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+
+            if (record.notes != null && record.notes!.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  'Nota: ${record.notes}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ),
+            ],
+
+            if ((record.amountPaid ?? 0) > 0) ...[
+              const SizedBox(height: 8),
+              Text(
+                'Abonado: \$${record.amountPaid!.toStringAsFixed(2)}',
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blue,
+                ),
+              ),
+            ],
+
+            const SizedBox(height: 8),
+            // Actions
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.print, size: 20, color: Colors.grey),
+                  tooltip: 'Reimprimir Ticket',
+                  onPressed: () async {
+                    if (!PrinterService.instance.isConnected) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Conecte la impresora primero'),
+                        ),
+                      );
+                      return;
+                    }
+
+                    // Check if restricted
+                    bool shouldPrint = true;
+                    String reason = '';
+
+                    if (record.pensionSubscriberId != null) {
+                      shouldPrint = false;
+                      reason = 'Pensiones';
+                    } else {
+                      EntryType? type;
+                      // Try to find by ID
+                      if (record.entryTypeId != null) {
+                        try {
+                          type = _entryTypes.firstWhere(
+                            (e) => e.id == record.entryTypeId,
+                          );
+                        } catch (_) {}
+                      }
+                      // Try to find by Name (fallback)
+                      if (type == null) {
+                        try {
+                          type = _entryTypes.firstWhere(
+                            (e) =>
+                                e.name.toUpperCase() ==
+                                record.clientType.toUpperCase(),
+                          );
+                        } catch (_) {}
+                      }
+
+                      if (type != null && !type.shouldPrintTicket) {
+                        shouldPrint = false;
+                        reason = type.name;
+                      }
+                    }
+
+                    if (!shouldPrint) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text('No se emiten tickets para $reason'),
+                        ),
+                      );
+                      return;
+                    }
+
+                    // Confirm Dialog with Preview
+                    await showDialog(
+                      context: context,
+                      builder: (dialogContext) => TicketPreviewDialog(
+                        record: record,
+                        onCancel: () => Navigator.pop(dialogContext),
+                        onPrint: () async {
+                          Navigator.pop(dialogContext); // Close dialog
+
+                          bool result = false;
+                          if (record.exitTime == null) {
+                            result = await PrinterService.instance
+                                .printEntryTicket(record);
+                          } else {
+                            result = await PrinterService.instance
+                                .printExitTicket(record);
+                          }
+
+                          if (!result && mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('Error al imprimir'),
+                              ),
+                            );
+                          }
+                        },
+                      ),
+                    );
+                  },
+                ),
+                if (AuthService.instance.isAdmin) ...[
+                  TextButton.icon(
+                    icon: const Icon(Icons.edit, size: 16),
+                    label: const Text('Editar'),
+                    onPressed: () => _showEditDialog(record),
+                  ),
+                  TextButton.icon(
+                    icon: const Icon(Icons.delete, size: 16, color: Colors.red),
+                    label: const Text(
+                      'Eliminar',
+                      style: TextStyle(color: Colors.red),
+                    ),
+                    onPressed: () => _confirmDeleteRecord(record.id),
+                  ),
+                ],
+                if (!isCompleted)
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.exit_to_app, size: 16),
+                    label: const Text('Salida'),
+                    onPressed: () => _showExitDialog(record),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red,
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(IconData icon, String label, String value) {
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: Colors.grey),
+        const SizedBox(width: 4),
+        Text(
+          '$label: ',
+          style: const TextStyle(fontSize: 12, color: Colors.grey),
+        ),
+        Text(
+          value,
+          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
+        ),
+      ],
     );
   }
 
   @override
   Widget build(BuildContext context) {
+    final isToday = DateUtils.isSameDay(_selectedDate, DateTime.now());
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Parking Control'),
+        elevation: 0, // Flat because we have a custom header
         actions: [
           IconButton(
             icon: const Icon(Icons.directions_car),
-            tooltip: 'Administrar Pensiones',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const PensionScreen()),
-              ).then((_) {
-                _loadConfigData(); // Reload subscribers
-                _refreshRecords();
-              });
-            },
+            tooltip: 'Pensiones',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const PensionScreen()),
+            ).then((_) => _refreshRecords()),
           ),
           IconButton(
             icon: const Icon(Icons.bar_chart),
-            tooltip: 'Cierre del Día',
+            tooltip: 'Cierre',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const DailyReportScreen(),
+              ),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.print),
+            tooltip: 'Impresora',
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => const PrinterSettingsScreen(),
+              ),
+            ),
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings_remote),
+            tooltip: 'Configurar Conexión',
             onPressed: () {
               Navigator.push(
                 context,
-                MaterialPageRoute(
-                  builder: (context) => const DailyReportScreen(),
-                ),
-              );
+                MaterialPageRoute(builder: (context) => const SettingsScreen()),
+              ).then((_) => _loadConfigData());
             },
           ),
           IconButton(
-            icon: const Icon(Icons.account_balance_wallet),
+            icon: const Icon(Icons.attach_money),
             tooltip: 'Finanzas',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => const FinancialScreen(),
-                ),
-              );
-            },
+            onPressed: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (context) => const FinancialScreen()),
+            ),
           ),
           if (AuthService.instance.isAdmin)
             IconButton(
               icon: const Icon(Icons.settings),
-              tooltip: 'Administración',
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const AdminScreen()),
-                ).then((_) => _loadConfigData());
-              },
+              tooltip: 'Admin',
+              onPressed: () => Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const AdminScreen()),
+              ).then((_) => _loadConfigData()),
             ),
-          if (AuthService.instance.isAdmin)
-            IconButton(
-              icon: const Icon(Icons.settings_remote),
-              tooltip: 'Configurar Conexión',
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const SettingsScreen(),
-                  ),
-                );
-              },
-            ),
-          IconButton(
-            icon: const Icon(Icons.info_outline),
-            tooltip: 'Acerca de',
-            onPressed: _showAboutDialog,
-          ),
           IconButton(
             icon: const Icon(Icons.logout),
-            tooltip: 'Cerrar Sesión',
-            onPressed: () {
-              AuthService.instance.logout();
-            },
+            onPressed: () => AuthService.instance.logout(),
           ),
         ],
         bottom: const PreferredSize(
@@ -1144,191 +1728,41 @@ class _HomeScreenState extends State<HomeScreen> {
           child: ConnectionStatusBar(),
         ),
       ),
-      body: Stack(
+      body: Column(
         children: [
-          _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : RefreshIndicator(
-                  onRefresh: () async {
-                    await context.read<SyncService>().syncData();
-                  },
-                  child: _records.isEmpty
-                      ? LayoutBuilder(
-                          builder: (context, constraints) =>
-                              SingleChildScrollView(
-                                physics: const AlwaysScrollableScrollPhysics(),
-                                child: SizedBox(
-                                  height: constraints.maxHeight,
-                                  child: const Center(
-                                    child: Text('No hay vehículos registrados'),
-                                  ),
-                                ),
-                              ),
-                        )
-                      : ListView.builder(
-                          padding: const EdgeInsets.only(
-                            bottom: 100,
-                          ), // Space for FAB
-                          itemCount: _records.length,
-                          itemBuilder: (context, index) {
-                            final record = _records[index];
-                            final isCompleted = record.exitTime != null;
-
-                            // Calculate duration if completed
-                            String durationText = '';
-                            if (isCompleted) {
-                              final duration = record.exitTime!.difference(
-                                record.entryTime,
-                              );
-                              final hours = duration.inHours;
-                              final minutes = duration.inMinutes % 60;
-                              durationText = '${hours}h ${minutes}m';
-                            }
-
-                            return Dismissible(
-                              key: Key(record.id),
-                              direction: AuthService.instance.isAdmin
-                                  ? DismissDirection.endToStart
-                                  : DismissDirection.none,
-                              background: Container(
-                                color: Colors.red,
-                                alignment: Alignment.centerRight,
-                                padding: const EdgeInsets.only(right: 20),
-                                child: const Icon(
-                                  Icons.delete,
-                                  color: Colors.white,
-                                ),
-                              ),
-                              confirmDismiss: (direction) async {
-                                return await showDialog(
-                                  context: context,
-                                  builder: (ctx) => AlertDialog(
-                                    title: const Text('Confirmar Eliminación'),
-                                    content: const Text(
-                                      '¿Estás seguro de eliminar este registro permanentemente?',
-                                    ),
-                                    actions: [
-                                      TextButton(
-                                        onPressed: () =>
-                                            Navigator.of(ctx).pop(false),
-                                        child: const Text('Cancelar'),
-                                      ),
-                                      TextButton(
-                                        onPressed: () =>
-                                            Navigator.of(ctx).pop(true),
-                                        child: const Text(
-                                          'Eliminar',
-                                          style: TextStyle(color: Colors.red),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              },
-                              onDismissed: (direction) async {
-                                final db = await _dbHelper.database;
-                                await db.delete(
-                                  'parking_records',
-                                  where: 'id = ?',
-                                  whereArgs: [record.id],
-                                );
-                                _refreshRecords();
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('Registro eliminado'),
-                                    ),
-                                  );
-                                }
-                              },
-                              child: Card(
-                                // Margin handled by Theme
-                                child: ListTile(
-                                  contentPadding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 12,
-                                  ),
-                                  leading: CircleAvatar(
-                                    backgroundColor: isCompleted
-                                        ? Colors.red.shade400
-                                        : Colors.green.shade400,
-                                    child: const Icon(
-                                      Icons.directions_car,
-                                      color: Colors.white,
-                                      size: 20,
-                                    ),
-                                  ),
-                                  title: Text(
-                                    '${record.folio != null ? "Folio ${record.folio} - " : ""}${record.plate} - ${record.clientType}',
-                                  ),
-                                  subtitle: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      if (record.description != null &&
-                                          record.description!.isNotEmpty)
-                                        Text(record.description!),
-                                      Text(
-                                        'Entrada: ${DateFormat('HH:mm').format(record.entryTime)}',
-                                      ),
-                                      if (isCompleted) ...[
-                                        Text(
-                                          'Salida: ${DateFormat('HH:mm').format(record.exitTime!)}',
-                                        ),
-                                        Text('Tiempo: $durationText'),
-                                        Text(
-                                          'Costo: \$${record.cost?.toStringAsFixed(2)}',
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                        ),
-                                      ] else
-                                        const Text(
-                                          'En curso...',
-                                          style: TextStyle(color: Colors.green),
-                                        ),
-                                    ],
-                                  ),
-                                  trailing: isCompleted
-                                      ? null
-                                      : IconButton(
-                                          icon: const Icon(
-                                            Icons.exit_to_app,
-                                            color: Colors.red,
-                                          ),
-                                          onPressed: () =>
-                                              _showExitDialog(record),
-                                        ),
-                                ),
-                              ),
-                            );
-                          },
-                        ),
-                ),
-          Positioned(
-            bottom: 30,
-            left: 0,
-            right: 0,
-            child: Center(
-              child: SizedBox(
-                width: 200, // Wider button
-                height: 60, // Taller button
-                child: FloatingActionButton.extended(
-                  onPressed: _showAddRecordDialog,
-                  icon: const Icon(Icons.add, size: 30),
-                  label: const Text(
-                    'Ingreso',
-                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+          _buildHeader(),
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : RefreshIndicator(
+                    onRefresh: _refreshRecords,
+                    child: _records.isEmpty
+                        ? ListView(
+                            children: const [
+                              SizedBox(height: 100),
+                              Center(child: Text('No hay registros')),
+                            ],
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.only(bottom: 80),
+                            itemCount: _records.length,
+                            itemBuilder: (context, index) {
+                              final record = _records[index];
+                              return _buildParkingCard(record);
+                            },
+                          ),
                   ),
-                  elevation: 8,
-                ),
-              ),
-            ),
           ),
         ],
       ),
-      floatingActionButton: null,
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
+      floatingActionButton: isToday
+          ? FloatingActionButton(
+              onPressed: _showAddRecordDialog,
+              tooltip: 'Nuevo Ingreso',
+              child: const Icon(Icons.add, size: 32),
+            )
+          : null,
     );
   }
 }

@@ -4,4 +4,8 @@ class AppConstants {
   static const String defaultApiBaseUrl =
       'https://atmosfera22.online/parking/api';
   // Note: apiBaseUrl is now dynamic via ConfigService
+
+  // Fallback para tipos de entrada cuando la BD está corrupta o incompleta
+  // (Solo usado en casos extremos, normalmente database_helper asegura el valor correcto)
+  static const String fallbackEntryTypeName = 'SIN_CATEGORIA';
 }

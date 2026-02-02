@@ -111,16 +111,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $id = gen_uuid();
                 $name = $_POST['name'];
                 $default_tariff_id = !empty($_POST['default_tariff_id']) ? $_POST['default_tariff_id'] : null;
-                $stmt = $pdo->prepare("INSERT INTO entry_types (id, name, default_tariff_id, is_active, is_synced) VALUES (?, ?, ?, 1, 1)");
-                $stmt->execute([$id, $name, $default_tariff_id]);
+                $is_default = isset($_POST['is_default']) ? 1 : 0;
+                $should_print = isset($_POST['should_print_ticket']) ? 1 : 0;
+
+                $pdo->beginTransaction();
+                
+                if ($is_default) {
+                    $pdo->exec("UPDATE entry_types SET is_default = 0");
+                }
+
+                $stmt = $pdo->prepare("INSERT INTO entry_types (id, name, default_tariff_id, is_active, is_synced, is_default, should_print_ticket) VALUES (?, ?, ?, 1, 1, ?, ?)");
+                $stmt->execute([$id, $name, $default_tariff_id, $is_default, $should_print]);
+                
+                $pdo->commit();
                 $message = "Tipo de ingreso agregado.";
 
             } elseif ($_POST['action'] === 'update_entry_type') {
                 $id = $_POST['id'];
                 $name = $_POST['name'];
                 $default_tariff_id = !empty($_POST['default_tariff_id']) ? $_POST['default_tariff_id'] : null;
-                $stmt = $pdo->prepare("UPDATE entry_types SET name = ?, default_tariff_id = ?, is_synced = 1 WHERE id = ?");
-                $stmt->execute([$name, $default_tariff_id, $id]);
+                $is_default = isset($_POST['is_default']) ? 1 : 0;
+                $should_print = isset($_POST['should_print_ticket']) ? 1 : 0;
+
+                $pdo->beginTransaction();
+
+                if ($is_default) {
+                    $stmt = $pdo->prepare("UPDATE entry_types SET is_default = 0 WHERE id != ?");
+                    $stmt->execute([$id]);
+                }
+
+                $stmt = $pdo->prepare("UPDATE entry_types SET name = ?, default_tariff_id = ?, is_synced = 1, is_default = ?, should_print_ticket = ? WHERE id = ?");
+                $stmt->execute([$name, $default_tariff_id, $is_default, $should_print, $id]);
+                
+                $pdo->commit();
                 $message = "Tipo de ingreso actualizado.";
 
             } elseif ($_POST['action'] === 'delete_entry_type') {
@@ -136,6 +159,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->prepare("UPDATE entry_types SET is_active = ?, is_synced = 1 WHERE id = ?");
                 $stmt->execute([$new, $id]);
                 $message = "Estado de tipo de ingreso actualizado.";
+
+
             }
         } catch (Exception $e) {
             $error = "Error: " . $e->getMessage();
@@ -147,17 +172,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $users = $pdo->query("SELECT * FROM users ORDER BY name")->fetchAll();
 $tariffs = $pdo->query("SELECT * FROM tariff_types ORDER BY name")->fetchAll();
 $entryTypes = $pdo->query("SELECT * FROM entry_types ORDER BY name")->fetchAll();
+$subscribers = $pdo->query("SELECT * FROM pension_subscribers ORDER BY folio DESC")->fetchAll();
+
 
 $tariffMap = [];
 foreach ($tariffs as $t) {
     $tariffMap[$t['id']] = $t['name'];
 }
 
+$view = $_GET['view'] ?? 'users';
+
 require_once 'includes/header.php';
 ?>
 
 <div class="mb-4">
-    <h2>Conf</h2>
+    <h2>Configuración del Sistema</h2>
 </div>
 
 <?php if ($message): ?>
@@ -171,21 +200,22 @@ require_once 'includes/header.php';
     </div>
 <?php endif; ?>
 
-<ul class="nav nav-tabs mb-4" id="adminTab" role="tablist">
+<ul class="nav nav-tabs mb-4">
     <li class="nav-item">
-        <button class="nav-link active" id="users-tab" data-bs-toggle="tab" data-bs-target="#users" type="button">Usuarios</button>
+        <a class="nav-link <?= $view === 'users' ? 'active' : '' ?>" href="?view=users">Usuarios</a>
     </li>
     <li class="nav-item">
-        <button class="nav-link" id="tariffs-tab" data-bs-toggle="tab" data-bs-target="#tariffs" type="button">Tarifas</button>
+        <a class="nav-link <?= $view === 'tariffs' ? 'active' : '' ?>" href="?view=tariffs">Tarifas</a>
     </li>
     <li class="nav-item">
-        <button class="nav-link" id="entry-types-tab" data-bs-toggle="tab" data-bs-target="#entry-types" type="button">Tipos de Ingreso</button>
+        <a class="nav-link <?= $view === 'entry_types' ? 'active' : '' ?>" href="?view=entry_types">Tipos de Ingreso</a>
     </li>
 </ul>
 
-<div class="tab-content" id="adminTabContent">
+<div class="tab-content">
     <!-- Users Tab -->
-    <div class="tab-pane fade show active" id="users">
+    <?php if ($view === 'users'): ?>
+    <div class="tab-pane fade show active">
         <div class="d-flex justify-content-between align-items-center mb-3">
             <h4>Gestión de Usuarios</h4>
             <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addUserModal">
@@ -252,9 +282,11 @@ require_once 'includes/header.php';
             </div>
         </div>
     </div>
+    <?php endif; ?>
 
     <!-- Tariffs Tab -->
-    <div class="tab-pane fade" id="tariffs">
+    <?php if ($view === 'tariffs'): ?>
+    <div class="tab-pane fade show active" id="tariffs">
         <div class="d-flex justify-content-between align-items-center mb-3">
             <h4>Gestión de Tarifas</h4>
             <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addTariffModal">
@@ -320,9 +352,11 @@ require_once 'includes/header.php';
             </div>
         </div>
     </div>
+    <?php endif; ?>
 
     <!-- Entry Types Tab -->
-    <div class="tab-pane fade" id="entry-types">
+    <?php if ($view === 'entry_types'): ?>
+    <div class="tab-pane fade show active" id="entry-types">
         <div class="d-flex justify-content-between align-items-center mb-3">
             <h4>Tipos de Ingreso</h4>
             <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addEntryTypeModal">
@@ -335,6 +369,7 @@ require_once 'includes/header.php';
                     <thead class="table-light">
                         <tr>
                             <th>Nombre</th>
+                            <th>Configuración</th>
                             <th>Tarifa Sugerida</th>
                             <th>Estado</th>
                             <th class="text-end">Acciones</th>
@@ -343,7 +378,19 @@ require_once 'includes/header.php';
                     <tbody>
                         <?php foreach ($entryTypes as $e): ?>
                         <tr class="<?= $e['is_active'] ? '' : 'table-secondary' ?>">
-                            <td class="fw-bold"><?= htmlspecialchars($e['name']) ?></td>
+                            <td class="fw-bold">
+                                <?= htmlspecialchars($e['name']) ?>
+                                <?php if (!empty($e['is_default'])): ?>
+                                    <span class="badge bg-primary ms-1">Default</span>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if (isset($e['should_print_ticket']) && $e['should_print_ticket']): ?>
+                                    <span class="badge bg-secondary" title="Emite Ticket"><i class="bi bi-printer"></i> Si</span>
+                                <?php else: ?>
+                                    <span class="badge bg-light text-dark border" title="No emite ticket"><i class="bi bi-printer-x"></i> No</span>
+                                <?php endif; ?>
+                            </td>
                             <td>
                                 <?php if (!empty($e['default_tariff_id']) && isset($tariffMap[$e['default_tariff_id']])): ?>
                                     <span class="badge bg-info text-dark"><?= htmlspecialchars($tariffMap[$e['default_tariff_id']]) ?></span>
@@ -359,7 +406,7 @@ require_once 'includes/header.php';
                                 <?php endif; ?>
                             </td>
                             <td class="text-end">
-                                <button class="btn btn-sm btn-outline-info me-1" onclick="openEditEntryTypeModal('<?= $e['id'] ?>', '<?= $e['name'] ?>', '<?= $e['default_tariff_id'] ?? '' ?>')" title="Editar">
+                                <button class="btn btn-sm btn-outline-info me-1" onclick="openEditEntryTypeModal('<?= $e['id'] ?>', '<?= $e['name'] ?>', '<?= $e['default_tariff_id'] ?? '' ?>', <?= !empty($e['is_default']) ? 1 : 0 ?>, <?= (isset($e['should_print_ticket']) && $e['should_print_ticket']) ? 1 : 0 ?>)" title="Editar">
                                     <i class="bi bi-pencil"></i>
                                 </button>
                                 <form method="POST" class="d-inline" onsubmit="return confirm('¿Estás seguro de eliminar este tipo de ingreso?');">
@@ -385,6 +432,8 @@ require_once 'includes/header.php';
             </div>
         </div>
     </div>
+    <?php endif; ?>
+
 </div>
 
 <!-- Add User Modal -->
@@ -559,10 +608,125 @@ require_once 'includes/header.php';
                             <?php endforeach; ?>
                         </select>
                     </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" name="is_default" id="edit_entry_is_default">
+                        <label class="form-check-label" for="edit_entry_is_default">Es Default (Seleccionado al inicio)</label>
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" name="should_print_ticket" id="edit_entry_should_print">
+                        <label class="form-check-label" for="edit_entry_should_print">Emitir Ticket Físico</label>
+                    </div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
                     <button type="submit" class="btn btn-primary">Guardar Cambios</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Add Subscriber Modal -->
+<div class="modal fade" id="addSubscriberModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Nueva Pensión</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST">
+                <div class="modal-body">
+                    <input type="hidden" name="action" value="add_subscriber">
+                    <div class="mb-3">
+                        <label class="form-label">Placa (Opcional)</label>
+                        <input type="text" class="form-control" name="plate" style="text-transform: uppercase">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Nombre / Alias</label>
+                        <input type="text" class="form-control" name="name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Tipo de Ingreso</label>
+                        <select class="form-select" name="entry_type">
+                            <?php foreach ($entryTypes as $type): ?>
+                                <option value="<?= htmlspecialchars($type['name']) ?>"><?= htmlspecialchars($type['name']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Mensualidad ($)</label>
+                        <input type="number" step="0.01" class="form-control" name="monthly_fee" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Fecha de Ingreso</label>
+                        <input type="date" class="form-control" name="entry_date" value="<?= date('Y-m-d') ?>" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Pagado Hasta (Opcional)</label>
+                        <input type="date" class="form-control" name="paid_until">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Observaciones</label>
+                        <textarea class="form-control" name="notes" rows="2"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Guardar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Subscriber Modal -->
+<div class="modal fade" id="editSubscriberModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Editar Pensión</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST">
+                <div class="modal-body">
+                    <input type="hidden" name="action" value="update_subscriber">
+                    <input type="hidden" name="id" id="edit_subscriber_id">
+                    <div class="mb-3">
+                        <label class="form-label">Placa (Opcional)</label>
+                        <input type="text" class="form-control" name="plate" id="edit_subscriber_plate" style="text-transform: uppercase">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Nombre / Alias</label>
+                        <input type="text" class="form-control" name="name" id="edit_subscriber_name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Tipo de Ingreso</label>
+                        <select class="form-select" name="entry_type" id="edit_subscriber_entry_type">
+                            <?php foreach ($entryTypes as $type): ?>
+                                <option value="<?= htmlspecialchars($type['name']) ?>"><?= htmlspecialchars($type['name']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Mensualidad ($)</label>
+                        <input type="number" step="0.01" class="form-control" name="monthly_fee" id="edit_subscriber_monthly_fee" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Fecha de Ingreso</label>
+                        <input type="date" class="form-control" name="entry_date" id="edit_subscriber_entry_date">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Pagado Hasta</label>
+                        <input type="date" class="form-control" name="paid_until" id="edit_subscriber_paid_until">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Observaciones</label>
+                        <textarea class="form-control" name="notes" id="edit_subscriber_notes" rows="2"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Actualizar</button>
                 </div>
             </form>
         </div>
@@ -594,11 +758,39 @@ function openEditTariffModal(id, name, cost, costFirst, costNext, periodMin, tol
     new bootstrap.Modal(document.getElementById('editTariffModal')).show();
 }
 
-function openEditEntryTypeModal(id, name, defaultTariffId) {
+function openEditEntryTypeModal(id, name, defaultTariffId, isDefault, shouldPrint) {
     document.getElementById('edit_entry_id').value = id;
     document.getElementById('edit_entry_name').value = name;
     document.getElementById('edit_entry_default_tariff').value = defaultTariffId || '';
+    document.getElementById('edit_entry_is_default').checked = isDefault == 1;
+    document.getElementById('edit_entry_should_print').checked = shouldPrint == 1;
     new bootstrap.Modal(document.getElementById('editEntryTypeModal')).show();
+}
+
+function openEditSubscriberModal(id, plate, name, entry_type, monthly_fee, entry_date, paid_until, notes) {
+    document.getElementById('edit_subscriber_id').value = id;
+    document.getElementById('edit_subscriber_plate').value = plate;
+    document.getElementById('edit_subscriber_name').value = name;
+    document.getElementById('edit_subscriber_entry_type').value = entry_type;
+    document.getElementById('edit_subscriber_monthly_fee').value = monthly_fee;
+    
+    if (entry_date) {
+        let d = new Date(parseInt(entry_date));
+        document.getElementById('edit_subscriber_entry_date').value = d.toISOString().split('T')[0];
+    } else {
+        document.getElementById('edit_subscriber_entry_date').value = '';
+    }
+
+    if (paid_until) {
+        let d = new Date(parseInt(paid_until));
+        document.getElementById('edit_subscriber_paid_until').value = d.toISOString().split('T')[0];
+    } else {
+        document.getElementById('edit_subscriber_paid_until').value = '';
+    }
+
+    document.getElementById('edit_subscriber_notes').value = notes;
+    
+    new bootstrap.Modal(document.getElementById('editSubscriberModal')).show();
 }
 </script>
 
@@ -676,6 +868,14 @@ function openEditEntryTypeModal(id, name, defaultTariffId) {
                                 <option value="<?= $t['id'] ?>"><?= htmlspecialchars($t['name']) ?></option>
                             <?php endforeach; ?>
                         </select>
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" name="is_default" id="add_entry_is_default">
+                        <label class="form-check-label" for="add_entry_is_default">Es Default (Seleccionado al inicio)</label>
+                    </div>
+                    <div class="mb-3 form-check">
+                        <input type="checkbox" class="form-check-input" name="should_print_ticket" id="add_entry_should_print" checked>
+                        <label class="form-check-label" for="add_entry_should_print">Emitir Ticket Físico</label>
                     </div>
                 </div>
                 <div class="modal-footer">

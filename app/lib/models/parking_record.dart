@@ -1,20 +1,23 @@
+import '../config/constants.dart';
 
 class ParkingRecord {
   final String id;
   final int? folio; // New: Sequential ID for receipts
   final String plate;
   final String? description; // Auto / Descripción
-  final String clientType; // Deprecated but kept for compatibility or use as Entry Type Name
+  final String
+  clientType; // Deprecated but kept for compatibility or use as Entry Type Name
   final String? entryTypeId; // New: Link to EntryType
   final String? entryUserId; // New: Who received the car
   final DateTime entryTime;
-  
+
   DateTime? exitTime;
   double? cost;
-  String? tariff; // Deprecated but kept for compatibility or use as Tariff Type Name
+  String?
+  tariff; // Deprecated but kept for compatibility or use as Tariff Type Name
   final String? tariffTypeId; // New: Link to TariffType
   final String? exitUserId; // New: Who processed the exit
-  
+
   String? notes; // COMENTARIOS
   bool isSynced;
   final String? pensionSubscriberId;
@@ -26,7 +29,7 @@ class ParkingRecord {
     this.folio,
     required this.plate,
     this.description,
-    this.clientType = 'GENERAL',
+    this.clientType = AppConstants.fallbackEntryTypeName,
     this.entryTypeId,
     this.entryUserId,
     required this.entryTime,
@@ -71,7 +74,7 @@ class ParkingRecord {
       folio: map['folio'] is String ? int.tryParse(map['folio']) : map['folio'],
       plate: map['plate'],
       description: map['description'],
-      clientType: map['client_type'] ?? 'GENERAL',
+      clientType: map['client_type'] ?? AppConstants.fallbackEntryTypeName,
       entryTypeId: map['entry_type_id'],
       entryUserId: map['entry_user_id'],
       entryTime: DateTime.fromMillisecondsSinceEpoch(

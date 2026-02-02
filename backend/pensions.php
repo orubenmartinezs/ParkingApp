@@ -8,6 +8,20 @@ $pdo = getDB();
 $message = '';
 $error = '';
 
+// Fetch Entry Types for Dropdown
+$entryTypes = [];
+$entryTypeMap = [];
+try {
+    $stmtTypes = $pdo->query("SELECT id, name FROM entry_types WHERE is_active = 1 ORDER BY name ASC");
+    $entryTypes = $stmtTypes->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($entryTypes as $et) {
+        $entryTypeMap[$et['id']] = $et['name'];
+    }
+} catch (Exception $e) {
+    // Fallback if table doesn't exist or error
+    $entryTypes = [];
+}
+
 function gen_uuid() {
     return sprintf( '%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
         mt_rand( 0, 0xffff ), mt_rand( 0, 0xffff ),
@@ -27,7 +41,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $plate = !empty($_POST['plate']) ? strtoupper($_POST['plate']) : null;
                 $name = $_POST['name'];
                 $notes = $_POST['notes'] ?? null;
-                $entry_type = $_POST['entry_type'];
+                $entry_type_id = $_POST['entry_type_id'];
                 $monthly_fee = $_POST['monthly_fee'];
                 $entry_date = strtotime($_POST['entry_date']) * 1000;
                 
@@ -38,9 +52,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->query("SELECT current_val FROM sequences WHERE name = 'pension_folio'");
                 $folio = $stmt->fetchColumn();
                 
-                $stmt = $pdo->prepare("INSERT INTO pension_subscribers (id, folio, plate, name, notes, entry_type, monthly_fee, entry_date, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)");
-                $stmt->execute([$id, $folio, $plate, $name, $notes, $entry_type, $monthly_fee, $entry_date]);
+                $stmt = $pdo->prepare("INSERT INTO pension_subscribers (id, folio, plate, name, notes, entry_type_id, monthly_fee, entry_date, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)");
+                $stmt->execute([$id, $folio, $plate, $name, $notes, $entry_type_id, $monthly_fee, $entry_date]);
                 $message = "Pensión agregada exitosamente. Folio: " . $folio;
+
+            } elseif ($_POST['action'] === 'update_subscriber') {
+                $id = $_POST['id'];
+                $plate = !empty($_POST['plate']) ? strtoupper($_POST['plate']) : null;
+                $name = $_POST['name'];
+                $notes = $_POST['notes'] ?? null;
+                $entry_type_id = $_POST['entry_type_id'];
+                $monthly_fee = $_POST['monthly_fee'];
+                $entry_date = !empty($_POST['entry_date']) ? strtotime($_POST['entry_date']) * 1000 : null;
+                $paid_until = !empty($_POST['paid_until']) ? strtotime($_POST['paid_until']) * 1000 : null;
+                
+                $stmt = $pdo->prepare("UPDATE pension_subscribers SET plate = ?, name = ?, notes = ?, entry_type_id = ?, monthly_fee = ?, entry_date = ?, paid_until = ? WHERE id = ?");
+                $stmt->execute([$plate, $name, $notes, $entry_type_id, $monthly_fee, $entry_date, $paid_until, $id]);
+                $message = "Suscriptor actualizado.";
 
             } elseif ($_POST['action'] === 'register_payment') {
                 $subscriber_id = $_POST['subscriber_id'];
@@ -146,7 +174,7 @@ require_once 'includes/header.php';
                                 <br><small class="text-muted"><i class="bi bi-card-text me-1"></i><?= htmlspecialchars($s['notes']) ?></small>
                             <?php endif; ?>
                         </td>
-                        <td><?= htmlspecialchars($s['entry_type']) ?></td>
+                        <td><?= htmlspecialchars($entryTypeMap[$s['entry_type_id']] ?? 'Desconocido') ?></td>
                         <td>$<?= number_format($s['monthly_fee'], 2) ?></td>
                         <td>
                             <?php if ($s['paid_until']): ?>
@@ -165,6 +193,9 @@ require_once 'includes/header.php';
                             <?php endif; ?>
                         </td>
                         <td class="text-end">
+                            <button class="btn btn-sm btn-outline-info me-1" onclick="openEditSubscriberModal('<?= $s['id'] ?>', '<?= $s['plate'] ?>', '<?= $s['name'] ?>', '<?= $s['entry_type_id'] ?>', '<?= $s['monthly_fee'] ?>', '<?= $s['entry_date'] ?>', '<?= $s['paid_until'] ?>', `<?= htmlspecialchars($s['notes'] ?? '') ?>`)" title="Editar">
+                                <i class="bi bi-pencil"></i>
+                            </button>
                             <button class="btn btn-sm btn-success me-1" onclick="openPaymentModal('<?= $s['id'] ?>', '<?= $s['plate'] ?>', <?= $s['monthly_fee'] ?>, <?= $s['paid_until'] ?? 0 ?>)" title="Registrar Pago">
                                 <i class="bi bi-cash-coin"></i>
                             </button>
@@ -217,9 +248,10 @@ require_once 'includes/header.php';
                     </div>
                     <div class="mb-3">
                         <label class="form-label">Tipo de Ingreso</label>
-                        <select class="form-select" name="entry_type">
-                            <option value="NOCTURNO">NOCTURNO</option>
-                            <option value="DIA y NOCHE">DIA y NOCHE</option>
+                        <select class="form-select" name="entry_type_id">
+                            <?php foreach ($entryTypes as $type): ?>
+                                <option value="<?= htmlspecialchars($type['id']) ?>"><?= htmlspecialchars($type['name']) ?></option>
+                            <?php endforeach; ?>
                         </select>
                     </div>
                     <div class="mb-3">
@@ -316,6 +348,93 @@ function openPaymentModal(id, plate, fee, paidUntil) {
     document.getElementById('payment_end_date').value = formatDate(endDate);
     
     new bootstrap.Modal(document.getElementById('paymentModal')).show();
+}
+</script>
+
+<!-- Edit Subscriber Modal -->
+<div class="modal fade" id="editSubscriberModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Editar Pensión</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST">
+                <div class="modal-body">
+                    <input type="hidden" name="action" value="update_subscriber">
+                    <input type="hidden" name="id" id="edit_subscriber_id">
+                    <div class="mb-3">
+                        <label class="form-label">Placa (Opcional)</label>
+                        <input type="text" class="form-control" name="plate" id="edit_subscriber_plate" style="text-transform: uppercase">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Nombre / Alias</label>
+                        <input type="text" class="form-control" name="name" id="edit_subscriber_name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Tipo de Ingreso</label>
+                        <select class="form-select" name="entry_type_id" id="edit_subscriber_entry_type">
+                            <?php foreach ($entryTypes as $type): ?>
+                                <option value="<?= htmlspecialchars($type['id']) ?>"><?= htmlspecialchars($type['name']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Mensualidad ($)</label>
+                        <input type="number" step="0.01" class="form-control" name="monthly_fee" id="edit_subscriber_monthly_fee" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Fecha de Ingreso</label>
+                        <input type="date" class="form-control" name="entry_date" id="edit_subscriber_entry_date">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Pagado Hasta</label>
+                        <input type="date" class="form-control" name="paid_until" id="edit_subscriber_paid_until">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">Observaciones</label>
+                        <textarea class="form-control" name="notes" id="edit_subscriber_notes" rows="2"></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Actualizar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+function openEditSubscriberModal(id, plate, name, entry_type_id, monthly_fee, entry_date, paid_until, notes) {
+    document.getElementById('edit_subscriber_id').value = id;
+    document.getElementById('edit_subscriber_plate').value = plate;
+    document.getElementById('edit_subscriber_name').value = name;
+    document.getElementById('edit_subscriber_entry_type').value = entry_type_id;
+    document.getElementById('edit_subscriber_monthly_fee').value = monthly_fee;
+    
+    if (entry_date) {
+        // Handle milliseconds if present
+        let d = new Date(parseInt(entry_date));
+        if (!isNaN(d.getTime())) {
+            document.getElementById('edit_subscriber_entry_date').value = d.toISOString().split('T')[0];
+        }
+    } else {
+        document.getElementById('edit_subscriber_entry_date').value = '';
+    }
+
+    if (paid_until) {
+        let d = new Date(parseInt(paid_until));
+        if (!isNaN(d.getTime())) {
+            document.getElementById('edit_subscriber_paid_until').value = d.toISOString().split('T')[0];
+        }
+    } else {
+        document.getElementById('edit_subscriber_paid_until').value = '';
+    }
+
+    document.getElementById('edit_subscriber_notes').value = notes;
+    
+    new bootstrap.Modal(document.getElementById('editSubscriberModal')).show();
 }
 </script>
 

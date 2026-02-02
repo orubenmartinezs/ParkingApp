@@ -30,7 +30,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 9,
+      version: 12,
       onCreate: _createDB,
       onUpgrade: _onUpgrade,
     );
@@ -185,6 +185,48 @@ class DatabaseHelper {
         LogService().error('Error en migración v9: $e');
       }
     }
+    if (oldVersion < 10) {
+      LogService().info(
+        'Actualizando base de datos a versión 10 (Print Config)...',
+      );
+      try {
+        await db.execute(
+          "ALTER TABLE entry_types ADD COLUMN should_print_ticket INTEGER DEFAULT 1",
+        );
+      } catch (e) {
+        LogService().error('Error en migración v10: $e');
+      }
+    }
+
+    if (oldVersion < 11) {
+      LogService().info(
+        'Actualizando base de datos a versión 11 (Default Entry Type)...',
+      );
+      try {
+        await db.execute(
+          "ALTER TABLE entry_types ADD COLUMN is_default INTEGER DEFAULT 0",
+        );
+      } catch (e) {
+        LogService().error('Error en migración v11: $e');
+      }
+    }
+
+    if (oldVersion < 12) {
+      LogService().info(
+        'Actualizando base de datos a versión 12 (Safety Check)...',
+      );
+      // Asegurar que existan columnas críticas
+      try {
+        await db.execute(
+          "ALTER TABLE entry_types ADD COLUMN is_default INTEGER DEFAULT 0",
+        );
+      } catch (_) {}
+      try {
+        await db.execute(
+          "ALTER TABLE entry_types ADD COLUMN should_print_ticket INTEGER DEFAULT 1",
+        );
+      } catch (_) {}
+    }
   }
 
   Future _createDB(Database db, int version) async {
@@ -204,6 +246,7 @@ class DatabaseHelper {
             );
           } catch (e) {
             LogService().error('Error creando tabla $tableName: $e');
+            print('SQL FAILED for $tableName: $sql');
             print('Error creando tabla $tableName desde SQL remoto: $e');
             throw Exception('SQL Remoto falló para $tableName');
           }
@@ -230,6 +273,34 @@ class DatabaseHelper {
   Future<void> fetchInitialData() async {
     final db = await instance.database;
     await _fetchInitialData(db);
+  }
+
+  // --- Helper Methods ---
+
+  Future<EntryType?> getDefaultEntryType() async {
+    final db = await database;
+    // 1. Buscar el marcado como default
+    final List<Map<String, dynamic>> defaults = await db.query(
+      'entry_types',
+      where: 'is_default = ?',
+      whereArgs: [1],
+      limit: 1,
+    );
+    if (defaults.isNotEmpty) {
+      return EntryType.fromMap(defaults.first);
+    }
+
+    // 2. Si no hay default, usar el primero disponible
+    final List<Map<String, dynamic>> all = await db.query(
+      'entry_types',
+      limit: 1,
+      orderBy: 'name ASC',
+    );
+    if (all.isNotEmpty) {
+      return EntryType.fromMap(all.first);
+    }
+
+    return null;
   }
 
   Future<void> _fetchInitialData(Database db) async {
@@ -611,7 +682,16 @@ class DatabaseHelper {
         // GARANTÍA DE INTEGRIDAD: Asegurar que entry_type nunca sea nulo
         if (!mutableItem.containsKey('entry_type') ||
             mutableItem['entry_type'] == null) {
-          mutableItem['entry_type'] = 'GENERAL';
+          // Intentar obtener el tipo default, si no, usar el primero disponible
+          final defaultType = await getDefaultEntryType();
+          if (defaultType != null) {
+            mutableItem['entry_type'] = defaultType.name;
+          } else if (entryTypesList.isNotEmpty) {
+            mutableItem['entry_type'] = entryTypesList.first['name'].toString();
+          } else {
+            // Último recurso absoluto si la tabla entry_types está vacía
+            mutableItem['entry_type'] = AppConstants.fallbackEntryTypeName;
+          }
         }
 
         // Limpieza
@@ -894,7 +974,7 @@ class DatabaseHelper {
       folio INTEGER,
       plate TEXT NOT NULL,
       description TEXT,
-      client_type TEXT NOT NULL DEFAULT 'GENERAL',
+      client_type TEXT NOT NULL DEFAULT 'SIN_CATEGORIA',
       entry_type_id TEXT,
       entry_user_id TEXT,
       entry_time INTEGER NOT NULL,
@@ -967,6 +1047,8 @@ class DatabaseHelper {
       is_active INTEGER NOT NULL,
       is_synced INTEGER NOT NULL DEFAULT 1,
       default_tariff_id TEXT,
+      should_print_ticket INTEGER DEFAULT 1,
+      is_default INTEGER DEFAULT 0,
       created_at TEXT,
       updated_at TEXT
     )
@@ -1077,6 +1159,20 @@ class DatabaseHelper {
       recordToInsert,
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  Future<ParkingRecord?> getRecordById(String id) async {
+    final db = await instance.database;
+    final result = await db.query(
+      'parking_records',
+      where: 'id = ?',
+      whereArgs: [id],
+    );
+
+    if (result.isNotEmpty) {
+      return ParkingRecord.fromMap(result.first);
+    }
+    return null;
   }
 
   Future<List<ParkingRecord>> getAllRecords() async {
@@ -1211,6 +1307,11 @@ class DatabaseHelper {
     );
   }
 
+  Future<void> deleteRecord(String id) async {
+    final db = await instance.database;
+    await db.delete('parking_records', where: 'id = ?', whereArgs: [id]);
+  }
+
   // Subscribers Methods
   Future<void> insertSubscriber(PensionSubscriber subscriber) async {
     final db = await instance.database;
@@ -1294,6 +1395,46 @@ class DatabaseHelper {
       payment.toMap(),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  Future<List<PensionSubscriber>> getAllPensionSubscribers() async {
+    final db = await instance.database;
+    final result = await db.query('pension_subscribers', orderBy: 'folio DESC');
+    return result.map((json) => PensionSubscriber.fromMap(json)).toList();
+  }
+
+  Future<void> insertPensionSubscriber(PensionSubscriber subscriber) async {
+    final db = await instance.database;
+    await db.insert(
+      'pension_subscribers',
+      subscriber.toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> updatePensionSubscriber(PensionSubscriber subscriber) async {
+    final db = await instance.database;
+    await db.update(
+      'pension_subscribers',
+      subscriber.toMap(),
+      where: 'id = ?',
+      whereArgs: [subscriber.id],
+    );
+  }
+
+  Future<void> deletePensionSubscriber(String id) async {
+    final db = await instance.database;
+    await db.delete('pension_subscribers', where: 'id = ?', whereArgs: [id]);
+  }
+
+  Future<List<PensionSubscriber>> getUnsyncedPensionSubscribers() async {
+    final db = await instance.database;
+    final result = await db.query(
+      'pension_subscribers',
+      where: 'is_synced = ?',
+      whereArgs: [0],
+    );
+    return result.map((json) => PensionSubscriber.fromMap(json)).toList();
   }
 
   Future<List<PensionPayment>> getPaymentsBySubscriber(

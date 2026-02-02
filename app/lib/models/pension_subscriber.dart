@@ -1,4 +1,5 @@
 import 'package:uuid/uuid.dart';
+import '../config/constants.dart';
 
 /// Modelo de datos que representa a un Suscriptor de Pensión.
 ///
@@ -81,7 +82,9 @@ class PensionSubscriber {
       id: map['id'],
       folio: map['folio'] is String ? int.tryParse(map['folio']) : map['folio'],
       plate: map['plate'],
-      entryType: map['entry_type'] ?? 'GENERAL', // Fallback de seguridad
+      entryType:
+          map['entry_type'] ??
+          AppConstants.fallbackEntryTypeName, // Fallback de seguridad
       monthlyFee: map['monthly_fee'] is String
           ? double.tryParse(map['monthly_fee']) ?? 0.0
           : (map['monthly_fee'] as num?)?.toDouble() ?? 0.0,

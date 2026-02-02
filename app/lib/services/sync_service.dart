@@ -413,4 +413,38 @@ class SyncService extends ChangeNotifier {
       }
     }
   }
+
+  Future<List<ParkingRecord>> getRecordsByDate(DateTime date) async {
+    if (!_isOnline) {
+      throw Exception('No hay conexión a internet');
+    }
+
+    final start = DateTime(date.year, date.month, date.day);
+    final end = start
+        .add(const Duration(days: 1))
+        .subtract(const Duration(milliseconds: 1));
+
+    try {
+      final url = '${ConfigService.instance.apiUrl}/parking_records.php';
+      final response = await _dio.get(
+        url,
+        queryParameters: {
+          'start_date': start.millisecondsSinceEpoch,
+          'end_date': end.millisecondsSinceEpoch,
+        },
+      );
+
+      if (response.statusCode == 200 && response.data['status'] == 'success') {
+        final List<dynamic> data = response.data['data'];
+        return data.map((json) => ParkingRecord.fromMap(json)).toList();
+      } else {
+        throw Exception(
+          'Error en respuesta del servidor: ${response.statusCode}',
+        );
+      }
+    } catch (e) {
+      LogService().error('Error obteniendo registros por fecha: $e');
+      rethrow;
+    }
+  }
 }

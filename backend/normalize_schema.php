@@ -15,21 +15,16 @@ try {
     // 1. Crear 'entry_types' si no existen basados en lo que hay en parking_records
     echo "1. Analizando Tipos de Entrada (client_type)...\n";
     
-    // Mapeo de unificación (Normalización de nombres)
-    $entryMap = [
-        'NOCTURNO' => 'PENSION NOCTURNA',
-        'SOLO NOCHE' => 'PENSION NOCTURNA',
-        'GENERAL' => 'GENERAL',
-        'PENSION' => 'PENSION MENSUAL',
-        // Agregar más mapeos según sea necesario
-    ];
+    // Mapeo de unificación eliminado para evitar hardcoding.
+    // Se utilizará el nombre existente en mayúsculas.
+    // El administrador puede renombrar los tipos desde el panel de control.
 
     $sqlUniqueClients = "SELECT DISTINCT client_type FROM parking_records WHERE entry_type_id IS NULL AND client_type IS NOT NULL";
     $stmtClients = $pdo->query($sqlUniqueClients);
     $clients = $stmtClients->fetchAll(PDO::FETCH_COLUMN);
 
     foreach ($clients as $clientName) {
-        $normalizedName = isset($entryMap[strtoupper($clientName)]) ? $entryMap[strtoupper($clientName)] : strtoupper($clientName);
+        $normalizedName = strtoupper($clientName);
         
         // Buscar si ya existe este tipo de entrada
         $stmtCheck = $pdo->prepare("SELECT id FROM entry_types WHERE UPPER(name) = ?");
@@ -97,7 +92,7 @@ try {
     $subTypes = $stmtSubs->fetchAll(PDO::FETCH_COLUMN);
 
     foreach ($subTypes as $subTypeName) {
-        $normalizedName = isset($entryMap[strtoupper($subTypeName)]) ? $entryMap[strtoupper($subTypeName)] : strtoupper($subTypeName);
+        $normalizedName = strtoupper($subTypeName);
 
         // Buscar ID
         $stmtCheck = $pdo->prepare("SELECT id FROM entry_types WHERE UPPER(name) = ?");

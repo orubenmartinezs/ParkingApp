@@ -9,9 +9,11 @@ requireLogin();
 $pdo = getDB();
 initSystemSettings($pdo); // Set Timezone
 
-// Fetch Entry Types and Tariff Types
+// Fetch Entry Types, Tariff Types, Users, and Subscribers
 $entryTypes = $pdo->query("SELECT * FROM entry_types WHERE is_active = 1 ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
 $tariffTypes = $pdo->query("SELECT * FROM tariff_types WHERE is_active = 1 ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
+$usersList = $pdo->query("SELECT id, name FROM users ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
+$subscribersList = $pdo->query("SELECT id, name, plate, entry_type_id FROM pension_subscribers WHERE is_active = 1 ORDER BY name")->fetchAll(PDO::FETCH_ASSOC);
 
 $currentUser = getCurrentUser();
 $isAdmin = isAdmin();
@@ -39,11 +41,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $isAdmin) {
             $notes = $_POST['notes'] ?: null;
             $amount_paid = !empty($_POST['amount_paid']) ? (float)$_POST['amount_paid'] : 0.0;
             $payment_status = $_POST['payment_status'] ?? 'PAID';
+            
+            // New Fields
+            $pension_subscriber_id = !empty($_POST['pension_subscriber_id']) ? $_POST['pension_subscriber_id'] : null;
+            $entry_user_id = !empty($_POST['entry_user_id']) ? $_POST['entry_user_id'] : $currentUser['id'];
+            // Only set exit user if there is an exit time. Use current user (operator) as the one processing the exit.
+            $exit_user_id = $exit_time ? $currentUser['id'] : null;
 
-            $sql = "INSERT INTO parking_records (id, plate, description, entry_type_id, entry_time, exit_time, cost, tariff_type_id, notes, amount_paid, payment_status, is_synced, created_at, updated_at) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NOW(), NOW())";
+            $sql = "INSERT INTO parking_records (id, plate, description, entry_type_id, entry_time, exit_time, cost, tariff_type_id, notes, amount_paid, payment_status, is_synced, pension_subscriber_id, entry_user_id, exit_user_id, created_at, updated_at) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, NOW(), NOW())";
             $stmt = $pdo->prepare($sql);
-            $stmt->execute([$id, $plate, $description, $entry_type_id, $entry_time, $exit_time, $cost, $tariff_type_id, $notes, $amount_paid, $payment_status]);
+            $stmt->execute([$id, $plate, $description, $entry_type_id, $entry_time, $exit_time, $cost, $tariff_type_id, $notes, $amount_paid, $payment_status, $pension_subscriber_id, $entry_user_id, $exit_user_id]);
             $message = "Registro creado correctamente.";
 
         } elseif ($action === 'update') {
@@ -61,12 +69,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $isAdmin) {
             $amount_paid = !empty($_POST['amount_paid']) ? (float)$_POST['amount_paid'] : 0.0;
             $payment_status = $_POST['payment_status'] ?? 'PAID';
 
+            // New Fields
+            $pension_subscriber_id = !empty($_POST['pension_subscriber_id']) ? $_POST['pension_subscriber_id'] : null;
+            $entry_user_id = !empty($_POST['entry_user_id']) ? $_POST['entry_user_id'] : null; 
+            // Only set exit user if there is an exit time. Use current user (operator) as the one processing the exit.
+            $exit_user_id = $exit_time ? $currentUser['id'] : null;
+
             $sql = "UPDATE parking_records SET 
                     plate = ?, description = ?, entry_type_id = ?, entry_time = ?, exit_time = ?, 
-                    cost = ?, tariff_type_id = ?, notes = ?, amount_paid = ?, payment_status = ?, is_synced = 1, updated_at = NOW()
+                    cost = ?, tariff_type_id = ?, notes = ?, amount_paid = ?, payment_status = ?, 
+                    pension_subscriber_id = ?, entry_user_id = ?, exit_user_id = ?,
+                    is_synced = 1, updated_at = NOW()
                     WHERE id = ?";
             $stmt = $pdo->prepare($sql);
-            $stmt->execute([$plate, $description, $entry_type_id, $entry_time, $exit_time, $cost, $tariff_type_id, $notes, $amount_paid, $payment_status, $id]);
+            $stmt->execute([$plate, $description, $entry_type_id, $entry_time, $exit_time, $cost, $tariff_type_id, $notes, $amount_paid, $payment_status, $pension_subscriber_id, $entry_user_id, $exit_user_id, $id]);
             $message = "Registro actualizado correctamente.";
 
         } elseif ($action === 'delete') {
@@ -131,10 +147,15 @@ $totalRecords = $countStmt->fetchColumn();
 $totalPages = ceil($totalRecords / $perPage);
 
 // Fetch records
-$sql = "SELECT r.*, et.name as entry_type_name, tt.name as tariff_name 
+$sql = "SELECT r.*, et.name as entry_type_name, tt.name as tariff_name, 
+               u_entry.name as entry_user_name, u_exit.name as exit_user_name,
+               ps.name as subscriber_name
         FROM parking_records r 
         LEFT JOIN entry_types et ON r.entry_type_id = et.id 
         LEFT JOIN tariff_types tt ON r.tariff_type_id = tt.id 
+        LEFT JOIN users u_entry ON r.entry_user_id = u_entry.id
+        LEFT JOIN users u_exit ON r.exit_user_id = u_exit.id
+        LEFT JOIN pension_subscribers ps ON r.pension_subscriber_id = ps.id
         WHERE $whereSql 
         ORDER BY r.entry_time DESC 
         LIMIT $perPage OFFSET $offset";
@@ -308,6 +329,24 @@ require_once 'includes/header.php';
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
+                <div class="mb-3 form-check">
+                    <input type="checkbox" class="form-check-input" id="is_pension" onchange="togglePension()">
+                    <label class="form-check-label" for="is_pension">¿Es Pensión?</label>
+                </div>
+
+                <div class="mb-3" id="subscriber_div" style="display:none;">
+                    <label class="form-label">Suscriptor</label>
+                    <select name="pension_subscriber_id" id="pension_subscriber_id" class="form-select" onchange="onSubscriberChange()">
+                        <option value="">-- Seleccionar --</option>
+                        <?php foreach ($subscribersList as $sub): ?>
+                            <option value="<?= htmlspecialchars($sub['id']) ?>" 
+                                data-plate="<?= htmlspecialchars($sub['plate']) ?>"
+                                data-entry-type="<?= htmlspecialchars($sub['entry_type_id']) ?>"
+                            ><?= htmlspecialchars($sub['name']) ?> (<?= htmlspecialchars($sub['plate']) ?>)</option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
                 <div class="mb-3">
                     <label class="form-label">Placa</label>
                     <input type="text" name="plate" id="plate" class="form-control" required style="text-transform: uppercase;" list="plateList" autocomplete="off">
@@ -318,7 +357,8 @@ require_once 'includes/header.php';
                     <input type="text" name="description" id="description" class="form-control" placeholder="Ej: Aveo Rojo" list="descList" autocomplete="off">
                     <datalist id="descList"></datalist>
                 </div>
-                <div class="mb-3">
+
+                <div class="mb-3" id="entry_type_div">
                     <label class="form-label">Tipo de Cliente</label>
                     <select name="entry_type_id" id="entry_type_id" class="form-select" onchange="updateDefaultTariff()">
                         <?php foreach ($entryTypes as $type): ?>
@@ -326,6 +366,7 @@ require_once 'includes/header.php';
                         <?php endforeach; ?>
                     </select>
                 </div>
+
                 <div class="row">
                     <div class="col-md-6 mb-3">
                         <label class="form-label">Entrada</label>
@@ -336,7 +377,8 @@ require_once 'includes/header.php';
                         <input type="datetime-local" name="exit_time" id="exit_time" class="form-control" onchange="updateCost()">
                     </div>
                 </div>
-                <div class="row">
+
+                <div class="row" id="cost_row">
                     <div class="col-md-6 mb-3">
                         <label class="form-label">Costo (Total)</label>
                         <input type="number" step="0.01" name="cost" id="cost" class="form-control" value="0.00">
@@ -358,7 +400,8 @@ require_once 'includes/header.php';
                         </select>
                     </div>
                 </div>
-                <div class="row">
+
+                <div class="row" id="payment_row">
                     <div class="col-md-6 mb-3">
                         <label class="form-label">Monto Pagado</label>
                         <input type="number" step="0.01" name="amount_paid" id="amount_paid" class="form-control" value="0.00" onchange="updatePaymentStatus()">
@@ -372,6 +415,18 @@ require_once 'includes/header.php';
                         </select>
                     </div>
                 </div>
+
+                <div class="row">
+                    <div class="col-md-12 mb-3">
+                        <label class="form-label">Atendido por</label>
+                        <select name="entry_user_id" id="entry_user_id" class="form-select">
+                            <?php foreach ($usersList as $u): ?>
+                                <option value="<?= $u['id'] ?>" <?= $u['id'] === $currentUser['id'] ? 'selected' : '' ?>><?= htmlspecialchars($u['name']) ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                </div>
+
                 <div class="mb-3">
                     <label class="form-label">Notas</label>
                     <textarea name="notes" id="notes" class="form-control" rows="2"></textarea>
@@ -516,9 +571,18 @@ function updateCost() {
     // First period covers X minutes.
     // Remaining minutes cover Y periods.
     
-    const firstPeriodCost = parseFloat(costFirst);
-    const nextPeriodCost = parseFloat(costNext);
-    const periodMin = parseInt(period);
+    const firstPeriodCost = parseFloat(costFirst) || 0;
+    const nextPeriodCost = parseFloat(costNext) || 0;
+    const periodMin = parseInt(period) || 60; // Default to 60 if invalid
+    const defaultCostVal = parseFloat(defaultCost) || 0;
+
+    // Fallback if specific costs are not set
+    if (firstPeriodCost === 0 && nextPeriodCost === 0) {
+        const hours = Math.ceil(durationMin / 60);
+        costInput.value = (hours * defaultCostVal).toFixed(2);
+        updatePaymentStatus();
+        return;
+    }
     
     let totalCost = firstPeriodCost;
     let remainingDurationMin = durationMin - periodMin;
@@ -539,6 +603,11 @@ function clearModal() {
     document.getElementById('plate').value = '';
     document.getElementById('description').value = '';
     
+    // Pension fields reset
+    document.getElementById('is_pension').checked = false;
+    togglePension();
+    document.getElementById('pension_subscriber_id').value = '';
+
     // Set first option as default if available
     const clientTypeSelect = document.getElementById('entry_type_id');
     if (clientTypeSelect.options.length > 0) {
@@ -553,6 +622,24 @@ function clearModal() {
     document.getElementById('amount_paid').value = '0.00';
     document.getElementById('payment_status').value = 'PAID';
     document.getElementById('notes').value = '';
+    
+    // Reset User fields
+    // Entry user should be current user (php injected selected attribute handles initial load, but here we need to reset)
+    // We can't easily know who is current user in pure JS without passing it.
+    // However, the HTML 'selected' attribute is on the current user.
+    // We can reset the select to its default selected option.
+    resetSelect('entry_user_id');
+}
+
+function resetSelect(id) {
+    const select = document.getElementById(id);
+    for (let i = 0; i < select.options.length; i++) {
+        if (select.options[i].defaultSelected) {
+            select.selectedIndex = i;
+            return;
+        }
+    }
+    select.selectedIndex = 0;
 }
 
 function editRecord(r) {
@@ -563,6 +650,19 @@ function editRecord(r) {
     document.getElementById('description').value = r.description || '';
     document.getElementById('entry_type_id').value = r.entry_type_id;
     
+    // Pension Logic
+    if (r.pension_subscriber_id) {
+        document.getElementById('is_pension').checked = true;
+        document.getElementById('pension_subscriber_id').value = r.pension_subscriber_id;
+    } else {
+        document.getElementById('is_pension').checked = false;
+        document.getElementById('pension_subscriber_id').value = '';
+    }
+    togglePension();
+    
+    // User Logic
+    document.getElementById('entry_user_id').value = r.entry_user_id || '';
+
     // Convert timestamp ms to datetime-local format
     const entryDate = new Date(parseInt(r.entry_time));
     // Adjust for timezone offset to show correct local time in input
@@ -585,6 +685,39 @@ function editRecord(r) {
     
     const modal = new bootstrap.Modal(document.getElementById('recordModal'));
     modal.show();
+}
+
+function togglePension() {
+    const isPension = document.getElementById('is_pension').checked;
+    const subscriberDiv = document.getElementById('subscriber_div');
+    const subscriberSelect = document.getElementById('pension_subscriber_id');
+    
+    if (isPension) {
+        subscriberDiv.style.display = 'block';
+    } else {
+        subscriberDiv.style.display = 'none';
+        subscriberSelect.value = '';
+        // Optional: clear plate if it was set by pension? No, user might want to keep it.
+    }
+}
+
+function onSubscriberChange() {
+    const subscriberSelect = document.getElementById('pension_subscriber_id');
+    const selectedOption = subscriberSelect.options[subscriberSelect.selectedIndex];
+    
+    if (selectedOption.value) {
+        const plate = selectedOption.getAttribute('data-plate');
+        const entryTypeId = selectedOption.getAttribute('data-entry-type');
+        
+        if (plate) {
+            document.getElementById('plate').value = plate;
+        }
+        
+        if (entryTypeId) {
+            document.getElementById('entry_type_id').value = entryTypeId;
+            updateDefaultTariff(); // Update tariff based on new entry type
+        }
+    }
 }
 
 function applyMonthFilter(monthValue) {
