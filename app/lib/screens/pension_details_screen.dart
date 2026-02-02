@@ -41,6 +41,198 @@ class _PensionDetailsScreenState extends State<PensionDetailsScreen> {
     }
   }
 
+  Future<void> _showEditSubscriberDialog() async {
+    final plateController = TextEditingController(text: _subscriber.plate);
+    final nameController = TextEditingController(text: _subscriber.name);
+    final notesController = TextEditingController(text: _subscriber.notes);
+    final feeController = TextEditingController(
+      text: _subscriber.monthlyFee.toString(),
+    );
+    String entryType = _subscriber.entryType;
+    String periodicity = _subscriber.periodicity;
+
+    final periodicityOptions = {
+      'WEEKLY': 'Semanal',
+      'BIWEEKLY': 'Quincenal',
+      'MONTHLY': 'Mensual',
+    };
+
+    final availableTypes = await DatabaseHelper.instance.getActiveEntryTypes();
+
+    if (!mounted) return;
+
+    await showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) {
+          return Dialog(
+            insetPadding: const EdgeInsets.all(16),
+            child: Container(
+              width: MediaQuery.of(context).size.width * 0.8,
+              padding: const EdgeInsets.all(24),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Editar Pensión',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 24),
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Nombre / Alias',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.person),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: plateController,
+                      decoration: const InputDecoration(
+                        labelText: 'Placa (Opcional)',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.directions_car),
+                      ),
+                      textCapitalization: TextCapitalization.characters,
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<String>(
+                      value: availableTypes.any((t) => t.name == entryType)
+                          ? entryType
+                          : null,
+                      decoration: const InputDecoration(
+                        labelText: 'Tipo de Ingreso',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.access_time),
+                      ),
+                      items: availableTypes
+                          .map(
+                            (type) => DropdownMenuItem(
+                              value: type.name,
+                              child: Text(type.name),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() {
+                            entryType = value;
+                          });
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: feeController,
+                      decoration: const InputDecoration(
+                        labelText: 'Monto de Cuota (\$)',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.attach_money),
+                      ),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<String>(
+                      value: periodicity,
+                      decoration: const InputDecoration(
+                        labelText: 'Periodicidad de Pago',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.update),
+                      ),
+                      items: periodicityOptions.entries
+                          .map(
+                            (entry) => DropdownMenuItem(
+                              value: entry.key,
+                              child: Text(entry.value),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() {
+                            periodicity = value;
+                          });
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: notesController,
+                      decoration: const InputDecoration(
+                        labelText: 'Observaciones',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.comment),
+                      ),
+                      maxLines: 2,
+                    ),
+                    const SizedBox(height: 24),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancelar'),
+                        ),
+                        const SizedBox(width: 16),
+                        ElevatedButton(
+                          onPressed: () async {
+                            final name = nameController.text.trim();
+                            final fee =
+                                double.tryParse(feeController.text) ?? 0.0;
+
+                            if (name.isEmpty) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('El nombre es obligatorio'),
+                                ),
+                              );
+                              return;
+                            }
+
+                            final updatedSubscriber = _subscriber.copyWith(
+                              name: name,
+                              plate: plateController.text.trim().isEmpty
+                                  ? null
+                                  : plateController.text.trim(),
+                              entryType: entryType,
+                              monthlyFee: fee,
+                              notes: notesController.text.trim(),
+                              periodicity: periodicity,
+                              isSynced: false,
+                            );
+
+                            await DatabaseHelper.instance.updateSubscriber(
+                              updatedSubscriber,
+                            );
+
+                            if (mounted) {
+                              setState(() {
+                                _subscriber = updatedSubscriber;
+                              });
+                              context.read<SyncService>().syncData();
+                              Navigator.pop(context);
+                            }
+                          },
+                          child: const Text('Guardar Cambios'),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> _showPaymentDialog() async {
     final amountController = TextEditingController(
       text: _subscriber.monthlyFee.toString(),
@@ -62,7 +254,14 @@ class _PensionDetailsScreenState extends State<PensionDetailsScreen> {
       }
     }
 
-    DateTime endDate = startDate.add(const Duration(days: 30));
+    // Determine days to add based on periodicity
+    int daysToAdd = 30; // Default MONTHLY
+    if (_subscriber.periodicity == 'WEEKLY')
+      daysToAdd = 7;
+    else if (_subscriber.periodicity == 'BIWEEKLY')
+      daysToAdd = 15;
+
+    DateTime endDate = startDate.add(Duration(days: daysToAdd));
     DateTime paymentDate = DateTime.now();
 
     await showDialog(
@@ -124,7 +323,9 @@ class _PensionDetailsScreenState extends State<PensionDetailsScreen> {
                           if (picked != null) {
                             setState(() {
                               startDate = picked;
-                              endDate = startDate.add(const Duration(days: 30));
+                              endDate = startDate.add(
+                                Duration(days: daysToAdd),
+                              );
                             });
                           }
                         },
@@ -311,9 +512,7 @@ class _PensionDetailsScreenState extends State<PensionDetailsScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.edit),
-            onPressed: () {
-              // TODO: Edit subscriber details
-            },
+            onPressed: _showEditSubscriberDialog,
           ),
           PopupMenuButton<String>(
             onSelected: (value) {
@@ -387,7 +586,11 @@ class _PensionDetailsScreenState extends State<PensionDetailsScreen> {
                     children: [
                       const Icon(Icons.attach_money, color: Colors.green),
                       Text(
-                        '${_subscriber.monthlyFee.toStringAsFixed(2)} / Mes',
+                        '${_subscriber.monthlyFee.toStringAsFixed(2)} / ${_subscriber.periodicity == 'WEEKLY'
+                            ? 'Semana'
+                            : _subscriber.periodicity == 'BIWEEKLY'
+                            ? 'Quincena'
+                            : 'Mes'}',
                         style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,

@@ -86,6 +86,13 @@ class _PensionScreenState extends State<PensionScreen> {
         ? availableTypes.first.name
         : AppConstants.fallbackEntryTypeName; // Fallback only if DB is empty
 
+    String periodicity = 'MONTHLY';
+    final periodicityOptions = {
+      'WEEKLY': 'Semanal',
+      'BIWEEKLY': 'Quincenal',
+      'MONTHLY': 'Mensual',
+    };
+
     DateTime entryDate = DateTime.now();
 
     if (!mounted) return;
@@ -216,13 +223,37 @@ class _PensionScreenState extends State<PensionScreen> {
                     TextField(
                       controller: feeController,
                       decoration: const InputDecoration(
-                        labelText: 'Mensualidad (\$)',
+                        labelText: 'Monto de Cuota (\$)',
                         border: OutlineInputBorder(),
                         prefixIcon: Icon(Icons.attach_money),
                       ),
                       keyboardType: const TextInputType.numberWithOptions(
                         decimal: true,
                       ),
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<String>(
+                      value: periodicity,
+                      decoration: const InputDecoration(
+                        labelText: 'Periodicidad de Pago',
+                        border: OutlineInputBorder(),
+                        prefixIcon: Icon(Icons.update),
+                      ),
+                      items: periodicityOptions.entries
+                          .map(
+                            (entry) => DropdownMenuItem(
+                              value: entry.key,
+                              child: Text(entry.value),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (value) {
+                        if (value != null) {
+                          setState(() {
+                            periodicity = value;
+                          });
+                        }
+                      },
                     ),
                     const SizedBox(height: 16),
                     TextField(
@@ -298,6 +329,7 @@ class _PensionScreenState extends State<PensionScreen> {
                               entryDate: entryDate.millisecondsSinceEpoch,
                               paidUntil: entryDate.millisecondsSinceEpoch,
                               isActive: true,
+                              periodicity: periodicity,
                             );
 
                             await _dbHelper.insertSubscriber(newSubscriber);
@@ -328,9 +360,16 @@ class _PensionScreenState extends State<PensionScreen> {
     final amountController = TextEditingController(
       text: subscriber.monthlyFee.toString(),
     );
-    DateTime selectedDate = DateTime.now();
     DateTime startDate = DateTime.now();
-    DateTime endDate = DateTime.now().add(const Duration(days: 30));
+
+    // Determine days to add based on periodicity
+    int daysToAdd = 30; // Default MONTHLY
+    if (subscriber.periodicity == 'WEEKLY')
+      daysToAdd = 7;
+    else if (subscriber.periodicity == 'BIWEEKLY')
+      daysToAdd = 15;
+
+    DateTime endDate = DateTime.now().add(Duration(days: daysToAdd));
 
     await showDialog(
       context: context,
@@ -372,8 +411,10 @@ class _PensionScreenState extends State<PensionScreen> {
                           if (picked != null) {
                             setState(() {
                               startDate = picked;
-                              // Auto actualizar fecha fin (+30 días)
-                              endDate = startDate.add(const Duration(days: 30));
+                              // Auto actualizar fecha fin
+                              endDate = startDate.add(
+                                Duration(days: daysToAdd),
+                              );
                             });
                           }
                         },

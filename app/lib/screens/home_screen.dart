@@ -22,6 +22,7 @@ import 'settings_screen.dart';
 import 'printer_settings_screen.dart';
 import '../services/printer_service.dart';
 import '../widgets/ticket_preview_dialog.dart';
+import '../widgets/user_profile_dialog.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -436,7 +437,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ),
                           ],
                           const SizedBox(height: 16),
-                          if (_users.isNotEmpty)
+                          if (AuthService.instance.isAdmin && _users.isNotEmpty)
                             DropdownButtonFormField<String>(
                               initialValue: selectedUserId,
                               decoration: const InputDecoration(
@@ -923,11 +924,12 @@ class _HomeScreenState extends State<HomeScreen> {
                               },
                             ),
                           const SizedBox(height: 16),
-                          if (_users.isNotEmpty)
+                          if (AuthService.instance.isAdmin && _users.isNotEmpty)
                             DropdownButtonFormField<String>(
                               initialValue: selectedUserId,
                               decoration: const InputDecoration(
                                 labelText: 'Entregado por',
+                                border: OutlineInputBorder(),
                               ),
                               items: _users
                                   .map(
@@ -939,6 +941,30 @@ class _HomeScreenState extends State<HomeScreen> {
                                   .toList(),
                               onChanged: (value) =>
                                   setState(() => selectedUserId = value),
+                            )
+                          else if (selectedUserId != null)
+                            InputDecorator(
+                              decoration: const InputDecoration(
+                                labelText: 'Entregado por',
+                                border: OutlineInputBorder(),
+                                filled: true,
+                                fillColor: Color(0xFFF5F5F5),
+                              ),
+                              child: Text(
+                                _users
+                                    .firstWhere(
+                                      (u) => u.id == selectedUserId,
+                                      orElse: () => User(
+                                        id: '',
+                                        name: 'Usuario',
+                                        pin: '',
+                                        role: 'STAFF',
+                                        isSynced: false,
+                                      ),
+                                    )
+                                    .name,
+                                style: const TextStyle(fontSize: 16),
+                              ),
                             ),
                           const SizedBox(height: 16),
                           TextField(
@@ -1718,9 +1744,73 @@ class _HomeScreenState extends State<HomeScreen> {
                 MaterialPageRoute(builder: (context) => const AdminScreen()),
               ).then((_) => _loadConfigData()),
             ),
-          IconButton(
-            icon: const Icon(Icons.logout),
-            onPressed: () => AuthService.instance.logout(),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.account_circle),
+            tooltip: 'Usuario',
+            onSelected: (value) {
+              switch (value) {
+                case 'profile':
+                  final user = AuthService.instance.currentUser;
+                  if (user != null) {
+                    showDialog(
+                      context: context,
+                      builder: (context) => UserProfileDialog(user: user),
+                    );
+                  }
+                  break;
+                case 'about':
+                  _showAboutDialog();
+                  break;
+                case 'logout':
+                  AuthService.instance.logout();
+                  break;
+              }
+            },
+            itemBuilder: (context) {
+              final user = AuthService.instance.currentUser;
+              return [
+                if (user != null)
+                  PopupMenuItem(
+                    enabled: false,
+                    child: Text(
+                      user.name,
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                if (user != null) const PopupMenuDivider(),
+                const PopupMenuItem(
+                  value: 'profile',
+                  child: Row(
+                    children: [
+                      Icon(Icons.person, color: Colors.blue),
+                      SizedBox(width: 8),
+                      Text('Mi Perfil'),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem(
+                  value: 'about',
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline, color: Colors.grey),
+                      SizedBox(width: 8),
+                      Text('Acerca de'),
+                    ],
+                  ),
+                ),
+                const PopupMenuDivider(),
+                const PopupMenuItem(
+                  value: 'logout',
+                  child: Row(
+                    children: [
+                      Icon(Icons.logout, color: Colors.red),
+                      SizedBox(width: 8),
+                      Text('Cerrar Sesión'),
+                    ],
+                  ),
+                ),
+              ];
+            },
           ),
         ],
         bottom: const PreferredSize(

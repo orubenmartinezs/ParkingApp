@@ -261,25 +261,45 @@ class _AdminScreenState extends State<AdminScreen>
   Future<void> _showAddEntryTypeDialog() async {
     final nameController = TextEditingController();
     bool shouldPrint = true;
+    String? selectedTariffId;
+    
+    // Pre-select first tariff if available
+    if (_tariffTypes.isNotEmpty) {
+      selectedTariffId = _tariffTypes.first.id;
+    }
 
     await showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
           title: const Text('Nuevo Tipo de Ingreso'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(labelText: 'Nombre'),
-              ),
-              SwitchListTile(
-                title: const Text('Imprimir Ticket'),
-                value: shouldPrint,
-                onChanged: (v) => setState(() => shouldPrint = v),
-              ),
-            ],
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(labelText: 'Nombre'),
+                ),
+                SwitchListTile(
+                  title: const Text('Imprimir Ticket'),
+                  value: shouldPrint,
+                  onChanged: (v) => setState(() => shouldPrint = v),
+                ),
+                if (_tariffTypes.isNotEmpty)
+                  DropdownButtonFormField<String>(
+                    value: selectedTariffId,
+                    decoration: const InputDecoration(labelText: 'Tarifa Sugerida'),
+                    items: _tariffTypes.map((t) {
+                      return DropdownMenuItem(
+                        value: t.id,
+                        child: Text(t.name),
+                      );
+                    }).toList(),
+                    onChanged: (v) => setState(() => selectedTariffId = v),
+                  ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -294,6 +314,7 @@ class _AdminScreenState extends State<AdminScreen>
                     name: nameController.text,
                     shouldPrintTicket: shouldPrint,
                     isSynced: false,
+                    defaultTariffId: selectedTariffId,
                   );
                   await _dbHelper.insertEntryType(newType);
                   _loadData();
@@ -311,25 +332,45 @@ class _AdminScreenState extends State<AdminScreen>
   Future<void> _showEditEntryTypeDialog(EntryType type) async {
     final nameController = TextEditingController(text: type.name);
     bool shouldPrint = type.shouldPrintTicket;
+    String? selectedTariffId = type.defaultTariffId;
+
+    // Validate selectedTariffId exists
+    if (selectedTariffId != null && !_tariffTypes.any((t) => t.id == selectedTariffId)) {
+      selectedTariffId = null;
+    }
 
     await showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setState) => AlertDialog(
           title: const Text('Editar Tipo de Ingreso'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameController,
-                decoration: const InputDecoration(labelText: 'Nombre'),
-              ),
-              SwitchListTile(
-                title: const Text('Imprimir Ticket'),
-                value: shouldPrint,
-                onChanged: (v) => setState(() => shouldPrint = v),
-              ),
-            ],
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(labelText: 'Nombre'),
+                ),
+                SwitchListTile(
+                  title: const Text('Imprimir Ticket'),
+                  value: shouldPrint,
+                  onChanged: (v) => setState(() => shouldPrint = v),
+                ),
+                if (_tariffTypes.isNotEmpty)
+                  DropdownButtonFormField<String>(
+                    value: selectedTariffId,
+                    decoration: const InputDecoration(labelText: 'Tarifa Sugerida'),
+                    items: _tariffTypes.map((t) {
+                      return DropdownMenuItem(
+                        value: t.id,
+                        child: Text(t.name),
+                      );
+                    }).toList(),
+                    onChanged: (v) => setState(() => selectedTariffId = v),
+                  ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -345,7 +386,7 @@ class _AdminScreenState extends State<AdminScreen>
                     shouldPrintTicket: shouldPrint,
                     isSynced: false,
                     isDefault: type.isDefault,
-                    defaultTariffId: type.defaultTariffId,
+                    defaultTariffId: selectedTariffId,
                     isActive: type.isActive,
                   );
                   await _dbHelper.updateEntryType(updated);

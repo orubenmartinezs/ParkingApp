@@ -41,6 +41,9 @@ class PensionSubscriber {
   /// Estado de sincronización: true (Sincronizado con servidor) o false (Cambios pendientes).
   final bool isSynced;
 
+  /// Periodicidad del pago: 'MONTHLY', 'BIWEEKLY', 'WEEKLY'
+  final String periodicity;
+
   PensionSubscriber({
     required this.id,
     this.folio,
@@ -53,6 +56,7 @@ class PensionSubscriber {
     this.paidUntil,
     this.isActive = true,
     this.isSynced = false,
+    this.periodicity = 'MONTHLY',
   });
 
   /// Convierte la instancia a un Mapa para insertar en SQLite.
@@ -70,6 +74,7 @@ class PensionSubscriber {
       'paid_until': paidUntil,
       'is_active': isActive ? 1 : 0,
       'is_synced': isSynced ? 1 : 0,
+      'periodicity': periodicity,
     };
   }
 
@@ -98,6 +103,7 @@ class PensionSubscriber {
           : map['paid_until'],
       isActive: map['is_active'] == 1 || map['is_active'] == '1',
       isSynced: map['is_synced'] == 1 || map['is_synced'] == '1',
+      periodicity: map['periodicity'] ?? 'MONTHLY',
     );
   }
 
@@ -114,6 +120,7 @@ class PensionSubscriber {
     int? paidUntil,
     bool? isActive,
     bool? isSynced,
+    String? periodicity,
   }) {
     return PensionSubscriber(
       id: id ?? this.id,
@@ -127,6 +134,7 @@ class PensionSubscriber {
       paidUntil: paidUntil ?? this.paidUntil,
       isActive: isActive ?? this.isActive,
       isSynced: isSynced ?? this.isSynced,
+      periodicity: periodicity ?? this.periodicity,
     );
   }
 }

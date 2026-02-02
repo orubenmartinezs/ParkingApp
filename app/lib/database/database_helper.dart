@@ -30,7 +30,7 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 12,
+      version: 13,
       onCreate: _createDB,
       onUpgrade: _onUpgrade,
     );
@@ -226,6 +226,19 @@ class DatabaseHelper {
           "ALTER TABLE entry_types ADD COLUMN should_print_ticket INTEGER DEFAULT 1",
         );
       } catch (_) {}
+    }
+
+    if (oldVersion < 13) {
+      LogService().info(
+        'Actualizando base de datos a versión 13 (Periodicidad Pensiones)...',
+      );
+      try {
+        await db.execute(
+          "ALTER TABLE pension_subscribers ADD COLUMN periodicity TEXT DEFAULT 'MONTHLY'",
+        );
+      } catch (e) {
+        LogService().error('Error en migración v13: $e');
+      }
     }
   }
 
@@ -1006,6 +1019,7 @@ class DatabaseHelper {
       paid_until INTEGER,
       is_active INTEGER NOT NULL,
       is_synced INTEGER NOT NULL,
+      periodicity TEXT DEFAULT 'MONTHLY',
       created_at TEXT,
       updated_at TEXT
     )

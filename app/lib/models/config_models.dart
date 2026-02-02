@@ -36,6 +36,24 @@ class User {
       isSynced: map['is_synced'] == 1,
     );
   }
+
+  User copyWith({
+    String? id,
+    String? name,
+    String? role,
+    String? pin,
+    bool? isActive,
+    bool? isSynced,
+  }) {
+    return User(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      role: role ?? this.role,
+      pin: pin ?? this.pin,
+      isActive: isActive ?? this.isActive,
+      isSynced: isSynced ?? this.isSynced,
+    );
+  }
 }
 
 class EntryType {

@@ -43,6 +43,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $notes = $_POST['notes'] ?? null;
                 $entry_type_id = $_POST['entry_type_id'];
                 $monthly_fee = $_POST['monthly_fee'];
+                $periodicity = $_POST['periodicity'] ?? 'MONTHLY';
                 $entry_date = strtotime($_POST['entry_date']) * 1000;
                 
                 // Generate Folio
@@ -52,8 +53,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->query("SELECT current_val FROM sequences WHERE name = 'pension_folio'");
                 $folio = $stmt->fetchColumn();
                 
-                $stmt = $pdo->prepare("INSERT INTO pension_subscribers (id, folio, plate, name, notes, entry_type_id, monthly_fee, entry_date, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)");
-                $stmt->execute([$id, $folio, $plate, $name, $notes, $entry_type_id, $monthly_fee, $entry_date]);
+                $stmt = $pdo->prepare("INSERT INTO pension_subscribers (id, folio, plate, name, notes, entry_type_id, monthly_fee, periodicity, entry_date, is_active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)");
+                $stmt->execute([$id, $folio, $plate, $name, $notes, $entry_type_id, $monthly_fee, $periodicity, $entry_date]);
                 $message = "Pensión agregada exitosamente. Folio: " . $folio;
 
             } elseif ($_POST['action'] === 'update_subscriber') {
@@ -63,11 +64,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $notes = $_POST['notes'] ?? null;
                 $entry_type_id = $_POST['entry_type_id'];
                 $monthly_fee = $_POST['monthly_fee'];
+                $periodicity = $_POST['periodicity'] ?? 'MONTHLY';
                 $entry_date = !empty($_POST['entry_date']) ? strtotime($_POST['entry_date']) * 1000 : null;
                 $paid_until = !empty($_POST['paid_until']) ? strtotime($_POST['paid_until']) * 1000 : null;
                 
-                $stmt = $pdo->prepare("UPDATE pension_subscribers SET plate = ?, name = ?, notes = ?, entry_type_id = ?, monthly_fee = ?, entry_date = ?, paid_until = ? WHERE id = ?");
-                $stmt->execute([$plate, $name, $notes, $entry_type_id, $monthly_fee, $entry_date, $paid_until, $id]);
+                $stmt = $pdo->prepare("UPDATE pension_subscribers SET plate = ?, name = ?, notes = ?, entry_type_id = ?, monthly_fee = ?, periodicity = ?, entry_date = ?, paid_until = ? WHERE id = ?");
+                $stmt->execute([$plate, $name, $notes, $entry_type_id, $monthly_fee, $periodicity, $entry_date, $paid_until, $id]);
                 $message = "Suscriptor actualizado.";
 
             } elseif ($_POST['action'] === 'register_payment') {
@@ -85,11 +87,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $end_date = strtotime($_POST['coverage_end_date']) * 1000;
                 } else {
                     // Fallback logic (should not be reached if form is valid)
-                    $stmt = $pdo->prepare("SELECT paid_until FROM pension_subscribers WHERE id = ?");
+                    $stmt = $pdo->prepare("SELECT paid_until, periodicity FROM pension_subscribers WHERE id = ?");
                     $stmt->execute([$subscriber_id]);
                     $sub = $stmt->fetch();
                     $start_date = ($sub['paid_until'] && $sub['paid_until'] > $payment_date) ? $sub['paid_until'] : $payment_date;
-                    $end_date = $start_date + (30 * 24 * 60 * 60 * 1000); 
+                    
+                    $periodicity = $sub['periodicity'] ?? 'MONTHLY';
+                    $days_to_add = 30; // Default MONTHLY
+                    if ($periodicity === 'WEEKLY') $days_to_add = 7;
+                    if ($periodicity === 'BIWEEKLY') $days_to_add = 15;
+                    
+                    $end_date = $start_date + ($days_to_add * 24 * 60 * 60 * 1000); 
                 }
                 
                 $payment_id = gen_uuid();
